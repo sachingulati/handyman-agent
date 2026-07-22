@@ -112,6 +112,52 @@ WATCHDOG_NUDGE = (
 )
 
 
+
+# Content the model has already written is on disk. Keeping it verbatim in
+# the conversation buys nothing and costs the most expensive resource
+# there is: measured on real jobs, file content in tool-call arguments was
+# 99% of accumulated context once reasoning was disabled, and the same
+# file was rewritten four to six times, so the same bytes were carried
+# several times over. Hosted providers cap input per request, so this is
+# the difference between a job finishing and dying mid-run.
+PRUNE_AFTER_ITERATIONS = 2
+PRUNABLE_TOOLS = ("write_file", "edit_file")
+
+
+def prune_written_content(messages: list[dict], keep_last: int = PRUNE_AFTER_ITERATIONS) -> int:
+    """Replace file bodies in older, already-executed tool calls with a stub.
+
+    Only touches calls old enough to have been acted on, so the model can
+    still see what it just did. Returns the number of characters freed.
+    """
+    freed = 0
+    cutoff = len(messages) - keep_last * 2
+    for index, message in enumerate(messages):
+        if index >= cutoff or message.get("role") != "assistant":
+            continue
+        for call in message.get("tool_calls") or []:
+            fn = call.get("function", {})
+            if fn.get("name") not in PRUNABLE_TOOLS:
+                continue
+            raw = fn.get("arguments") or ""
+            if raw.startswith("{\"pruned\""):
+                continue
+            try:
+                parsed = json.loads(raw)
+            except (ValueError, TypeError):
+                continue
+            body = parsed.get("content") or parsed.get("new_str") or ""
+            if len(body) < 400:
+                continue
+            fn["arguments"] = json.dumps({
+                "pruned": True,
+                "path": parsed.get("path", "?"),
+                "note": f"{len(body)} characters already written to disk",
+            })
+            freed += len(raw) - len(fn["arguments"])
+    return freed
+
+
 def estimate_tokens(messages: list[dict]) -> int:
     """Cheap ~4-chars-per-token estimate, good enough for a growth threshold."""
     return len(json.dumps(messages)) // 4
@@ -224,6 +270,9 @@ def run_job(
                 log.write(f"\n--- iteration {iteration} ---\n{json.dumps(message)}\n")
                 db.touch(conn, job_id)
                 progress.record(conn, job_id, iteration, "chat")
+                freed = prune_written_content(messages)
+                if freed:
+                    log.write(f"[pruned {freed} chars of already-written content]\n")
 
                 tool_calls = message.get("tool_calls") or []
                 if tool_calls:

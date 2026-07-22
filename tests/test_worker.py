@@ -646,3 +646,71 @@ def test_run_job_records_a_nudge_when_the_model_stalls(tmp_path):
 
     kinds = [e["event_type"] for e in progress.recent_events(conn, job_id, limit=20)]
     assert "nudge" in kinds, "a stalled turn must be recorded as a nudge"
+
+
+def _write_call(path, body):
+    import json
+    return {"id": "c1", "function": {"name": "write_file",
+            "arguments": json.dumps({"path": path, "content": body})}}
+
+
+def test_prune_replaces_old_file_bodies_with_a_stub():
+    """Measured on real jobs: once reasoning is off, file content in
+    tool-call arguments is ~99% of accumulated context, and the same file
+    gets rewritten several times. Hosted providers cap input per request,
+    so carrying it is what kills a long job."""
+    import json
+
+    big = "x" * 5000
+    messages = [
+        {"role": "system", "content": "s"},
+        {"role": "user", "content": "t"},
+        {"role": "assistant", "tool_calls": [_write_call("a.py", big)]},
+        {"role": "tool", "tool_call_id": "c1", "content": "ok"},
+        {"role": "assistant", "tool_calls": [_write_call("b.py", big)]},
+        {"role": "tool", "tool_call_id": "c1", "content": "ok"},
+        {"role": "assistant", "tool_calls": [_write_call("c.py", big)]},
+        {"role": "tool", "tool_call_id": "c1", "content": "ok"},
+    ]
+    freed = worker.prune_written_content(messages)
+    assert freed > 4000
+
+    pruned = json.loads(messages[2]["tool_calls"][0]["function"]["arguments"])
+    assert pruned["pruned"] is True
+    assert pruned["path"] == "a.py"
+    assert "5000 characters" in pruned["note"]
+
+
+def test_prune_leaves_the_most_recent_calls_intact():
+    """The model must still see what it just did."""
+    import json
+
+    big = "y" * 5000
+    messages = [
+        {"role": "system", "content": "s"},
+        {"role": "user", "content": "t"},
+        {"role": "assistant", "tool_calls": [_write_call("recent.py", big)]},
+        {"role": "tool", "tool_call_id": "c1", "content": "ok"},
+    ]
+    worker.prune_written_content(messages)
+    kept = json.loads(messages[2]["tool_calls"][0]["function"]["arguments"])
+    assert kept.get("content") == big, "the most recent write must not be pruned"
+
+
+def test_prune_is_idempotent_and_skips_small_bodies():
+    import json
+
+    messages = [
+        {"role": "system", "content": "s"},
+        {"role": "user", "content": "t"},
+        {"role": "assistant", "tool_calls": [_write_call("tiny.py", "small")]},
+        {"role": "tool", "tool_call_id": "c1", "content": "ok"},
+        {"role": "assistant", "tool_calls": [_write_call("big.py", "z" * 5000)]},
+        {"role": "tool", "tool_call_id": "c1", "content": "ok"},
+        {"role": "assistant", "content": "done"},
+        {"role": "tool", "tool_call_id": "c1", "content": "ok"},
+    ]
+    worker.prune_written_content(messages)
+    first = worker.prune_written_content(messages)
+    assert first == 0, "pruning twice must not double-count"
+    assert json.loads(messages[2]["tool_calls"][0]["function"]["arguments"])["content"] == "small"
