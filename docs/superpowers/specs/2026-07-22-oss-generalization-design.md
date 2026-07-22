@@ -766,6 +766,57 @@ cross-platform process-utils item in the Architecture section. Both
 defects live in `run_bash`; this one is the more damaging because it is
 silent and affects every command, not only timed-out ones.
 
+## Local-model delegation limits (measured 2026-07-22)
+
+Measured by delegating real build work to the local model and auditing
+every result. These shape what the tool should advertise itself as good
+for, and they inform `docs/DELEGATING.md`.
+
+**Reliable**
+
+| Mode | Typical | Notes |
+|---|---|---|
+| Shell commands (`run_bash`) | 20-30s | Fastest and most reliable mode |
+| Copying a file | 88s | Use a shell `cp`; see the anti-pattern below |
+| Single-line edits | ~30-60s each | Correct, including across 8 in one job |
+| Authoring a new file under ~60 lines | 80-95s | Against tests written first |
+
+**Unreliable or unsafe**
+
+- **Authoring more than ~60 lines in one call.** A ~130-line module
+  produced *nothing* in 911s - no partial file, no error, just a timeout.
+  The ceiling sits between 60 and 130 lines and the failure is silent.
+- **Multi-line edits inside an indented block.** Keeps the first line's
+  indentation and strips it from the rest, producing invalid Python
+  without any error.
+- **`ctypes` / native API calls.** Produced a memory-corrupting defect:
+  `GetExitCodeProcess` called with one argument instead of two, so an
+  arbitrary address was passed as the out-pointer. Do not delegate FFI.
+- **Transcribing content it could copy.** Timed out twice reproducing a
+  60-line file that a shell `cp` handled in 88s.
+
+**Reasoning is binary, and can block all output.** The model ships with
+thinking enabled. `reasoning_effort` `low`/`medium`/`high` are
+indistinguishable from the default; only `none` disables it. On a large
+or ambiguous task, reasoning consumed the entire budget and produced
+**zero tool calls in 28 minutes**; the identical task with reasoning off
+finished in 94s with working code.
+
+**The cost driver is ambiguity, not reasoning.** One internally
+inconsistent instruction - a prompt saying "four files" that then listed
+three - cost ~14 minutes of visible re-derivation in the job log. A clean
+task spends ~3s deliberating. Prompt precision is a far cheaper lever
+than disabling a capability.
+
+**Attribution caveat, recorded deliberately.** Over this session more
+defects originated with the *controller* than with the model: shell
+quoting that reached the model as literal backslashes, inconsistent
+counts, fix instructions naming one of two identical bugs, and the same
+heredoc escaping bug twice. A workflow that assumes the small model is
+the unreliable component will misattribute most of its failures. The
+job-status and event trail added this round exists partly to make that
+distinction cheap.
+
 ## Testing plan (agreed this round)
 
 Current state: 127 tests across 11 files, all mocked/unit, **plus** a
