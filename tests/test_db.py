@@ -285,3 +285,40 @@ def test_connect_creates_a_missing_data_directory(tmp_path):
     conn = db.connect(nested)
     conn.close()
     assert nested.exists()
+
+
+def test_reaper_frees_a_job_stranded_with_an_unset_pid(tmp_path):
+    """A worker that dies between claim and set_pid leaves the row at
+    'running' with the pid=0 placeholder. The old guard skipped falsy pids
+    entirely, so such a row was unreapable and held a concurrency slot
+    forever - eventually wedging the whole queue."""
+    import datetime
+
+    conn = db.connect(tmp_path / "jobs.db")
+    job_id = db.create_job(conn, "t", "/tmp")
+    assert db.try_claim_with_cap(conn, job_id, pid=0, max_concurrent=3)
+
+    stale = (
+        datetime.datetime.now(datetime.timezone.utc)
+        - datetime.timedelta(seconds=db.UNSET_PID_GRACE_SECONDS + 60)
+    ).isoformat()
+    conn.execute("UPDATE jobs SET updated_at=? WHERE id=?", (stale, job_id))
+    conn.commit()
+
+    db.reap_dead_running_jobs(conn)
+
+    assert db.get_job(conn, job_id)["status"] == "error"
+    assert db.count_running(conn) == 0
+
+
+def test_reaper_leaves_a_freshly_claimed_job_alone(tmp_path):
+    """The pid is genuinely not known for a moment after claiming, so a
+    just-claimed row must survive - reaping on falsy pid alone would kill
+    every job microseconds after it starts."""
+    conn = db.connect(tmp_path / "jobs.db")
+    job_id = db.create_job(conn, "t", "/tmp")
+    db.try_claim_with_cap(conn, job_id, pid=0, max_concurrent=3)
+
+    db.reap_dead_running_jobs(conn)
+
+    assert db.get_job(conn, job_id)["status"] == "running"

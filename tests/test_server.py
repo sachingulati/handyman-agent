@@ -199,3 +199,20 @@ def test_gemma_check_survives_unreadable_progress_tables(tmp_path, monkeypatch):
 
     assert result["job_id"] == job_id
     assert result["status"] == "queued"
+
+
+def test_gemma_delegate_records_the_real_worker_pid(tmp_path, monkeypatch):
+    """The claim uses a pid=0 placeholder, so the row is briefly
+    unattributable. Recording the spawned pid immediately shrinks that
+    window to almost nothing instead of relying on the reaper's grace."""
+    monkeypatch.setattr(
+        config, "load", lambda *a, **k: make_config(tmp_path, db_path=tmp_path / "jobs.db")
+    )
+    monkeypatch.setattr(server, "_spawn_worker", lambda job_id: 4242)
+
+    result = server.gemma_delegate("do a thing", str(tmp_path))
+
+    conn = db.connect(tmp_path / "jobs.db")
+    job = db.get_job(conn, result["job_id"])
+    conn.close()
+    assert job["pid"] == 4242

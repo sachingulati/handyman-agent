@@ -10,8 +10,8 @@ from handyman import worker
 mcp = FastMCP("gemma-agent")
 
 
-def _spawn_worker(job_id: str) -> None:
-    worker.spawn_worker(job_id)
+def _spawn_worker(job_id: str) -> int:
+    return worker.spawn_worker(job_id)
 
 
 @mcp.tool()
@@ -38,7 +38,13 @@ def gemma_delegate(task: str, working_dir: str) -> dict:
 
         if claimed:
             try:
-                _spawn_worker(job_id)
+                # Record the real pid as soon as it exists. The claim above
+                # used a placeholder, leaving the row briefly unattributable
+                # to any process; closing that window fast means the reaper's
+                # grace period is a backstop rather than the primary defence.
+                worker_pid = _spawn_worker(job_id)
+                if worker_pid:
+                    db.set_pid(conn, job_id, worker_pid)
             except Exception as exc:
                 db.update_status(
                     conn, job_id, "error", result_summary=f"failed to spawn worker: {exc}"

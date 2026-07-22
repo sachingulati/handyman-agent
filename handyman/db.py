@@ -19,19 +19,45 @@ def reap_dead_running_jobs(conn: sqlite3.Connection) -> None:
     occupies one of the concurrency slots, eventually wedging the whole
     queue. Call this before any capacity check or status read.
     """
-    rows = conn.execute("SELECT id, pid FROM jobs WHERE status='running'").fetchall()
-    for job_id, pid in rows:
-        if pid and not is_pid_alive(pid):
+    now = datetime.now(timezone.utc)
+    rows = conn.execute(
+        "SELECT id, pid, updated_at FROM jobs WHERE status='running'"
+    ).fetchall()
+    for job_id, pid, updated_at in rows:
+        if pid:
+            stranded = not is_pid_alive(pid)
+            reason = "worker process is no longer running"
+        else:
+            # No pid recorded. That is legitimate for a moment after the
+            # claim and before the worker registers itself, so only treat
+            # it as stranded once it has been that way for a while.
+            # Reaping on a falsy pid alone would kill every job the
+            # instant it started.
+            try:
+                age = (now - datetime.fromisoformat(updated_at)).total_seconds()
+            except (TypeError, ValueError):
+                age = 0
+            stranded = age > UNSET_PID_GRACE_SECONDS
+            reason = "worker never started (no pid recorded)"
+
+        if stranded:
             conn.execute(
                 "UPDATE jobs SET status='error', "
-                "result_summary=COALESCE(result_summary, 'worker process is no longer running'), "
+                "result_summary=COALESCE(result_summary, ?), "
                 "updated_at=? WHERE id=? AND status='running'",
-                (now_iso(), job_id),
+                (reason, now_iso(), job_id),
             )
     conn.commit()
 
 
 BASE_TIER = "small"
+
+# How long a 'running' job may sit with no pid recorded before the reaper
+# treats it as stranded. A job is claimed before its worker exists, so
+# there is always a brief, legitimate window where the pid is unknown;
+# this must be comfortably longer than that window and shorter than a
+# user's patience.
+UNSET_PID_GRACE_SECONDS = 120
 
 
 def connect(db_path) -> sqlite3.Connection:

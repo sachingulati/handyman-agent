@@ -91,7 +91,7 @@ def test_spawn_worker_redirects_stdout_and_stderr_to_job_log(monkeypatch, tmp_pa
         stdout.write("pre-crash output that must not be lost\n")
 
         class _FakeProcess:
-            pass
+            pid = 12345  # spawn_worker returns this so the caller can record it
 
         return _FakeProcess()
 

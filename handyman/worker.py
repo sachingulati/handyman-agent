@@ -370,12 +370,12 @@ def main(job_id: str) -> None:
             spawn_worker(next_job_id)
 
 
-def spawn_worker(job_id: str) -> None:
+def spawn_worker(job_id: str) -> int:
     cfg = config.load()
     cfg.jobs_log_dir.mkdir(parents=True, exist_ok=True)
     log_path = cfg.jobs_log_dir / f"{job_id}.log"
     with open(log_path, "a", encoding="utf-8") as log_file:
-        subprocess.Popen(
+        process = subprocess.Popen(
             # -m, not a file path: executing the file directly would put
             # handyman/ on sys.path instead of the repo root, breaking the
             # package-absolute imports at the top of this module.
@@ -384,6 +384,7 @@ def spawn_worker(job_id: str) -> None:
             stderr=subprocess.STDOUT,
             **procutil.detached_kwargs(),
         )
+    return process.pid
 
 
 if __name__ == "__main__":
