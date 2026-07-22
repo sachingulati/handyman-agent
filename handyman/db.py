@@ -94,6 +94,10 @@ def connect(db_path) -> sqlite3.Connection:
     if "escalating" not in existing_columns:
         conn.execute("ALTER TABLE jobs ADD COLUMN escalating INTEGER NOT NULL DEFAULT 0")
     conn.commit()
+
+    from handyman import progress  # imported here to avoid a circular import at module load
+    progress.ensure_schema(conn)
+    conn.commit()
     return conn
 
 

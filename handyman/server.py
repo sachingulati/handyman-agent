@@ -4,6 +4,7 @@ from mcp.server.fastmcp import FastMCP
 
 from handyman import config
 from handyman import db
+from handyman import progress
 from handyman import worker
 
 mcp = FastMCP("gemma-agent")
@@ -71,6 +72,29 @@ def gemma_check(job_id: str) -> dict:
     response = {"job_id": job["id"], "status": job["status"]}
     if job["status"] in ("done", "incomplete", "timeout", "error", "canceled"):
         response["result_summary"] = job["result_summary"]
+
+    # Progress detail so a caller can see what a running job is doing
+    # without reading its log. Best-effort: a status check must never fail
+    # because the progress tables are missing or unreadable.
+    conn = None
+    try:
+        conn = db.connect(config.DB_PATH)
+        hb = progress.heartbeat(conn, job_id)
+        if hb:
+            response["iteration"] = hb["iteration"]
+            response["last_action"] = hb["last_action"]
+        events = progress.recent_events(conn, job_id, limit=5)
+        if events:
+            response["recent"] = [
+                f"{e['iteration']}: {e['event_type']}"
+                + (f" {e['detail']}" if e["detail"] else "")
+                for e in events
+            ]
+    except Exception:
+        pass
+    finally:
+        if conn is not None:
+            conn.close()
     return response
 
 

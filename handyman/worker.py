@@ -9,6 +9,7 @@ from pathlib import Path
 from handyman import config
 from handyman import db
 from handyman import ollama_client
+from handyman import progress
 from handyman import tools
 
 TOOL_SCHEMAS = [
@@ -200,6 +201,7 @@ def run_job(
                     )
                     sleep_fn(ESCALATION_POLL_INTERVAL_SECONDS)
                 db.set_current_tier(conn, job_id, desired_tier)
+                progress.record(conn, job_id, iteration, "escalate", desired_tier)
                 db.set_escalating(conn, job_id, False)
                 log.write(
                     f"\n[escalated to {desired_tier}: conversation ~{tokens} "
@@ -220,6 +222,7 @@ def run_job(
                 messages.append(message)
                 log.write(f"\n--- iteration {iteration} ---\n{json.dumps(message)}\n")
                 db.touch(conn, job_id)
+                progress.record(conn, job_id, iteration, "chat")
 
                 tool_calls = message.get("tool_calls") or []
                 if tool_calls:
@@ -228,6 +231,7 @@ def run_job(
                         fn = call["function"]
                         name = fn["name"]
                         arguments = json.loads(fn["arguments"])
+                        progress.record(conn, job_id, iteration, "tool_call", name)
                         result = execute_tool_fn(name, arguments)
                         log.write(f"[tool {name}] -> {result}\n")
                         messages.append(
@@ -242,11 +246,13 @@ def run_job(
                 content = message.get("content") or ""
                 if "TASK_COMPLETE" in content:
                     summary = content.replace("TASK_COMPLETE", "").strip()
+                    progress.record(conn, job_id, iteration, "done")
                     db.update_status(conn, job_id, "done", result_summary=summary)
                     log.write("\n[done]\n")
                     return
 
                 watchdog_retries += 1
+                progress.record(conn, job_id, iteration, "nudge", f"attempt {watchdog_retries}")
                 if watchdog_retries > watchdog_max_retries:
                     db.update_status(
                         conn, job_id, "incomplete",
