@@ -1,4 +1,5 @@
 import sqlite3
+from pathlib import Path
 import uuid
 from datetime import datetime, timezone
 
@@ -34,6 +35,12 @@ BASE_TIER = "small"
 
 
 def connect(db_path) -> sqlite3.Connection:
+    # The data directory may not exist yet on a fresh install; sqlite3
+    # reports a bare "unable to open database file" if it is missing,
+    # which is the first thing a new user would ever see.
+    parent = Path(db_path).parent
+    if str(parent):
+        parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(db_path))
     conn.execute(
         """

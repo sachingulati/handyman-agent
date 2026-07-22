@@ -275,3 +275,13 @@ def test_reap_dead_running_jobs_frees_a_wedged_concurrency_slot(tmp_path):
     db.reap_dead_running_jobs(conn)
 
     assert db.try_claim_with_cap(conn, new_job, pid=os.getpid(), max_concurrent=1) is True
+
+
+def test_connect_creates_a_missing_data_directory(tmp_path):
+    """On a fresh install the data dir does not exist yet, and sqlite3
+    reports only 'unable to open database file' - the first thing a new
+    user would ever see."""
+    nested = tmp_path / "does" / "not" / "exist" / "jobs.db"
+    conn = db.connect(nested)
+    conn.close()
+    assert nested.exists()
