@@ -192,6 +192,54 @@ def cmd_doctor(args) -> int:
     return 0 if not problems else 1
 
 
+def cmd_setup(args) -> int:
+    """Pick a model for this machine and prove it works before saving it."""
+    import yaml
+
+    from handyman import setup
+
+    dest = pathlib.Path(args.output) if args.output else config.default_config_path()
+    host = args.host
+
+    vram = setup.detect_vram_gb()
+    print(f"detected VRAM : {vram} GB" if vram else
+          "detected VRAM : unknown - offering every candidate rather than guessing")
+
+    candidates = setup.recommend(vram)
+    if args.model:
+        candidates = [(args.model, 0.0, "requested explicitly")]
+
+    print("\nTrying candidates, largest first. A model is only accepted once a")
+    print("real request with a real tool schema comes back with a populated")
+    print("tool_calls field - advertised support has proven unreliable.\n")
+
+    for model, size, note in candidates:
+        label = f"{model} (~{size} GB)" if size else model
+        print(f"  {label} - {note}")
+        if not args.no_pull:
+            print("    pulling...", flush=True)
+            proc = subprocess.run(["ollama", "pull", model], capture_output=True, text=True)
+            if proc.returncode != 0:
+                print(f"    could not pull: {proc.stderr.strip()[:100]}")
+                continue
+        print("    testing tool calling...", flush=True)
+        ok, why = setup.verify_tool_calling(host, model)
+        if not ok:
+            print(f"    rejected: {why}")
+            continue
+
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_text(yaml.safe_dump(setup.build_config(model, host), sort_keys=False),
+                        encoding="utf-8")
+        print(f"\n    accepted. Wrote {dest}")
+        print("    Check it over with `handyman doctor`.")
+        return 0
+
+    print("\nNo candidate passed. Options: install a different model and rerun "
+          "with --model, or configure a hosted provider.")
+    return 1
+
+
 def cmd_ps(args) -> int:
     orphans = workspace.orphan_workers()
     for o in orphans:
@@ -242,6 +290,13 @@ def build_parser() -> argparse.ArgumentParser:
     doc = sub.add_parser("doctor", help="check that results could be trusted")
     doc.add_argument("--workspace")
     doc.set_defaults(func=cmd_doctor)
+
+    st = sub.add_parser("setup", help="pick a model for this machine and verify it")
+    st.add_argument("--model", help="skip detection and test this model")
+    st.add_argument("--host", default="http://localhost:11434")
+    st.add_argument("--output", help="where to write the config")
+    st.add_argument("--no-pull", action="store_true", help="assume models are present")
+    st.set_defaults(func=cmd_setup)
 
     ps = sub.add_parser("ps", help="find detached workers with no live parent")
     ps.add_argument("--kill-orphans", action="store_true")
