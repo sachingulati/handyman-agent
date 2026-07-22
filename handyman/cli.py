@@ -52,7 +52,8 @@ def cmd_run(args) -> int:
     before = _snapshot(workdir)
     started = time.monotonic()
 
-    result = server.gemma_delegate(task, str(workdir))
+    result = server.gemma_delegate(task, str(workdir),
+                                   allow_hosted=getattr(args, "allow_hosted", False))
     job_id = result.get("job_id")
     if not job_id:
         return _emit(result)
@@ -128,7 +129,8 @@ def cmd_batch(args) -> int:
     for task, test in entries:
         ns = argparse.Namespace(task=task, working_dir=args.working_dir,
                                 test=(test if test and test != "-" else None),
-                                timeout=args.timeout)
+                                timeout=args.timeout,
+                                allow_hosted=getattr(args, "allow_hosted", False))
         started = time.monotonic()
         code = cmd_run(ns)
         results.append((task, code == 0, time.monotonic() - started))
@@ -215,6 +217,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     d = sub.add_parser("delegate", help="submit a task and return immediately")
     d.add_argument("task"); d.add_argument("working_dir")
+    d.add_argument("--allow-hosted", action="store_true",
+                   help="permit a hosted model when local is busy or down; "
+                        "this sends the task off the machine")
 
     c = sub.add_parser("check", help="status of a job"); c.add_argument("job_id")
     x = sub.add_parser("cancel", help="ask a job to stop"); x.add_argument("job_id")
@@ -224,12 +229,14 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument("working_dir")
     r.add_argument("--test", help="command to run afterwards, in the working dir")
     r.add_argument("--timeout", type=int, default=3600)
+    r.add_argument("--allow-hosted", action="store_true")
     r.set_defaults(func=cmd_run)
 
     b = sub.add_parser("batch", help="run a queue of tasks in order")
     b.add_argument("queue", help="one 'task-file|test-command' per line")
     b.add_argument("working_dir")
     b.add_argument("--timeout", type=int, default=3600)
+    b.add_argument("--allow-hosted", action="store_true")
     b.set_defaults(func=cmd_batch)
 
     doc = sub.add_parser("doctor", help="check that results could be trusted")
@@ -253,7 +260,8 @@ def main(argv: list[str]) -> int:
     if hasattr(args, "func"):
         return args.func(args)
     if args.cmd == "delegate":
-        return _emit(server.gemma_delegate(args.task, args.working_dir))
+        return _emit(server.gemma_delegate(args.task, args.working_dir,
+                                           allow_hosted=args.allow_hosted))
     if args.cmd == "check":
         return _emit(server.gemma_check(args.job_id))
     if args.cmd == "cancel":

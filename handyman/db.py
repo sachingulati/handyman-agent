@@ -81,6 +81,7 @@ def connect(db_path) -> sqlite3.Connection:
             transcript_path TEXT,
             pid INTEGER,
             cancel_requested INTEGER NOT NULL DEFAULT 0,
+            provider TEXT NOT NULL DEFAULT 'local',
             current_tier TEXT NOT NULL DEFAULT 'small',
             escalating INTEGER NOT NULL DEFAULT 0
         )
@@ -94,6 +95,11 @@ def connect(db_path) -> sqlite3.Connection:
         conn.execute("ALTER TABLE jobs ADD COLUMN current_tier TEXT NOT NULL DEFAULT 'small'")
     if "escalating" not in existing_columns:
         conn.execute("ALTER TABLE jobs ADD COLUMN escalating INTEGER NOT NULL DEFAULT 0")
+    # Idempotent migration, same pattern as every other added column:
+    # CREATE TABLE IF NOT EXISTS is a no-op on an existing table.
+    existing = {row[1] for row in conn.execute("PRAGMA table_info(jobs)")}
+    if "provider" not in existing:
+        conn.execute("ALTER TABLE jobs ADD COLUMN provider TEXT NOT NULL DEFAULT 'local'")
     conn.commit()
 
     from handyman import progress  # imported here to avoid a circular import at module load
@@ -102,13 +108,14 @@ def connect(db_path) -> sqlite3.Connection:
     return conn
 
 
-def create_job(conn: sqlite3.Connection, task: str, working_dir: str) -> str:
+def create_job(conn: sqlite3.Connection, task: str, working_dir: str,
+               provider: str = "local") -> str:
     job_id = uuid.uuid4().hex
     ts = now_iso()
     conn.execute(
-        "INSERT INTO jobs (id, task, working_dir, status, created_at, updated_at, cancel_requested) "
-        "VALUES (?, ?, ?, 'queued', ?, ?, 0)",
-        (job_id, task, working_dir, ts, ts),
+        "INSERT INTO jobs (id, task, working_dir, status, created_at, updated_at, "
+        "cancel_requested, provider) VALUES (?, ?, ?, 'queued', ?, ?, 0, ?)",
+        (job_id, task, working_dir, ts, ts, provider),
     )
     conn.commit()
     return job_id
@@ -118,7 +125,7 @@ def get_job(conn: sqlite3.Connection, job_id: str) -> dict | None:
     row = conn.execute(
         "SELECT id, task, working_dir, status, created_at, updated_at, "
         "result_summary, transcript_path, pid, cancel_requested, "
-        "current_tier, escalating "
+        "current_tier, escalating, provider "
         "FROM jobs WHERE id=?",
         (job_id,),
     ).fetchone()
@@ -127,7 +134,7 @@ def get_job(conn: sqlite3.Connection, job_id: str) -> dict | None:
     keys = [
         "id", "task", "working_dir", "status", "created_at", "updated_at",
         "result_summary", "transcript_path", "pid", "cancel_requested",
-        "current_tier", "escalating",
+        "current_tier", "escalating", "provider",
     ]
     return dict(zip(keys, row))
 
@@ -137,7 +144,32 @@ def count_running(conn: sqlite3.Connection) -> int:
     return row[0]
 
 
-def try_claim_with_cap(conn: sqlite3.Connection, job_id: str, pid: int, max_concurrent: int) -> bool:
+def count_running_local(conn: sqlite3.Connection) -> int:
+    """Running jobs that occupy the GPU.
+
+    The concurrency cap and the tier-agreement rule exist because one GPU
+    holds one model at a time. A hosted job runs on someone else's
+    hardware, so counting it would block local work for no reason.
+    """
+    row = conn.execute(
+        "SELECT COUNT(*) FROM jobs WHERE status='running' AND provider='local'"
+    ).fetchone()
+    return row[0]
+
+
+def try_claim_with_cap(conn: sqlite3.Connection, job_id: str, pid: int,
+                       max_concurrent: int, provider: str = "local") -> bool:
+    if provider != "local":
+        # Hosted work neither consumes VRAM nor pins a model, so neither
+        # the cap nor the shared-tier rule applies to it.
+        cur = conn.execute(
+            "UPDATE jobs SET status='running', pid=?, updated_at=?, current_tier=? "
+            "WHERE id=? AND status='queued'",
+            (pid, now_iso(), BASE_TIER, job_id),
+        )
+        conn.commit()
+        return cur.rowcount == 1
+
     # A freshly claimed job always starts on BASE_TIER, so it may only join
     # the running cohort if no running job is on a different tier and none
     # is mid-escalation - otherwise Ollama would thrash between two loaded
@@ -146,9 +178,11 @@ def try_claim_with_cap(conn: sqlite3.Connection, job_id: str, pid: int, max_conc
         """
         UPDATE jobs SET status='running', pid=?, updated_at=?, current_tier=?
         WHERE id=? AND status='queued'
-          AND (SELECT COUNT(*) FROM jobs WHERE status='running') < ?
-          AND (SELECT COUNT(*) FROM jobs WHERE status='running' AND current_tier != ?) = 0
-          AND (SELECT COUNT(*) FROM jobs WHERE status='running' AND escalating != 0) = 0
+          AND (SELECT COUNT(*) FROM jobs WHERE status='running' AND provider='local') < ?
+          AND (SELECT COUNT(*) FROM jobs WHERE status='running' AND provider='local'
+               AND current_tier != ?) = 0
+          AND (SELECT COUNT(*) FROM jobs WHERE status='running' AND provider='local'
+               AND escalating != 0) = 0
         """,
         (pid, now_iso(), BASE_TIER, job_id, max_concurrent, BASE_TIER),
     )
@@ -162,8 +196,10 @@ def claim_next_queued_job(conn: sqlite3.Connection, pid: int) -> str | None:
         UPDATE jobs SET status='running', pid=?, updated_at=?, current_tier=?
         WHERE id = (
             SELECT id FROM jobs WHERE status='queued'
-              AND (SELECT COUNT(*) FROM jobs WHERE status='running' AND current_tier != ?) = 0
-              AND (SELECT COUNT(*) FROM jobs WHERE status='running' AND escalating != 0) = 0
+              AND (SELECT COUNT(*) FROM jobs WHERE status='running' AND provider='local'
+                   AND current_tier != ?) = 0
+              AND (SELECT COUNT(*) FROM jobs WHERE status='running' AND provider='local'
+                   AND escalating != 0) = 0
             ORDER BY created_at LIMIT 1
         )
           AND status='queued'

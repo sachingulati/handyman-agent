@@ -392,10 +392,18 @@ def main(job_id: str) -> None:
         log_path = cfg.jobs_log_dir / f"{job_id}.log"
         db.update_status(conn, job_id, "running", transcript_path=str(log_path))
 
+        # A hosted job ignores the tier ladder entirely: escalation exists
+        # to grow context on a GPU that can only hold one model, and a
+        # hosted model has neither constraint.
+        hosted = job.get("provider") == "hosted"
         base_tier, *escalation = cfg.tiers
+        if hosted:
+            escalation = []
         # A hosted provider has nothing to pull, and its /api/tags does
         # not exist - asking would fail the job before it starts.
-        if not config.api_key_for(cfg):
+        # Nothing to pull for a hosted provider, and its /api/tags does
+        # not exist - asking would fail the job before it starts.
+        if not hosted and not config.api_key_for(cfg):
             if not ollama_client.model_is_pulled(cfg.ollama_host, base_tier.model):
                 ollama_client.pull_model(cfg.ollama_host, base_tier.model)
 
