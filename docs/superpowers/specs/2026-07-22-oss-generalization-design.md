@@ -817,6 +817,55 @@ the unreliable component will misattribute most of its failures. The
 job-status and event trail added this round exists partly to make that
 distinction cheap.
 
+## Live testing round (2026-07-22, after Plan A)
+
+Ran the real CLI against the real config and a real local model, rather
+than trusting the suite. Three findings, two of them things 161 green
+tests could never have caught.
+
+**1. Fresh-install blocker (FIXED).** `config` resolves `db_path` into a
+platform data directory that nothing created, so the very first command a
+new user runs failed with a bare `unable to open database file`. Invisible
+to the test suite because every test points `db_path` at `tmp_path`, which
+always exists. `db.connect` now creates the directory.
+
+**2. Job stranding via the pid placeholder (FIXED).** Previously recorded
+in this document as a defect; both halves are now closed.
+`gemma_delegate` claims with `pid=0`, and the reaper guarded on
+`if pid and not is_pid_alive(pid)` - zero is falsy, so the row was skipped
+forever while still counting against the concurrency cap.
+
+The naive fix is wrong: the pid is *legitimately* unknown for a moment
+after the claim, so reaping any falsy pid would kill every job the instant
+it started. The reaper now distinguishes:
+
+| Row state | Action |
+|---|---|
+| pid set, process dead | reap |
+| pid unset, claimed recently | leave alone |
+| pid unset, older than `UNSET_PID_GRACE_SECONDS` | reap |
+
+`spawn_worker` also returns the child pid now, and `gemma_delegate`
+records it immediately, so the grace period is a backstop rather than the
+primary defence. Verified live: a job records a real pid at spawn where
+the old code left `0`.
+
+**3. Job observability works.** A running job now answers with iteration,
+last action and its event trail from one query:
+
+```
+status=done  iteration=2  last_action=done
+recent=[1: chat, 1: tool_call write_file, 2: chat, 2: done]
+```
+
+Two live jobs completed end to end in ~15s each with correct output.
+
+**Caveat on the spawn path.** The detached spawn succeeded here, having
+failed repeatedly earlier in the same session from the old repo's
+registered MCP server process. That suggests those failures were specific
+to that long-lived server process rather than to the spawn code. Treat the
+spawn as "working when launched fresh", not as proven under MCP.
+
 ## Testing plan (agreed this round)
 
 Current state: 127 tests across 11 files, all mocked/unit, **plus** a
