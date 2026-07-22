@@ -6,10 +6,10 @@ import time
 import traceback
 from pathlib import Path
 
-import config
-import db
-import ollama_client
-import tools
+from handyman import config
+from handyman import db
+from handyman import ollama_client
+from handyman import tools
 
 TOOL_SCHEMAS = [
     {
@@ -362,7 +362,10 @@ def spawn_worker(job_id: str) -> None:
     log_path = config.JOBS_LOG_DIR / f"{job_id}.log"
     with open(log_path, "a", encoding="utf-8") as log_file:
         subprocess.Popen(
-            [sys.executable, str(Path(__file__).resolve()), job_id],
+            # -m, not a file path: executing the file directly would put
+            # handyman/ on sys.path instead of the repo root, breaking the
+            # package-absolute imports at the top of this module.
+            [sys.executable, "-m", "handyman.worker", job_id],
             stdout=log_file,
             stderr=subprocess.STDOUT,
             creationflags=creationflags,

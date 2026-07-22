@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "handyman-agent"
+version = "0.1.0"
+description = "Delegate grunt work to a local LLM over MCP"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+dependencies = [
+    "mcp>=1.2.0",
+    "requests>=2.31.0",
+    "PyYAML>=6.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0.0"]
+
+[project.scripts]
+handyman = "handyman.cli:entrypoint"
+
+[tool.setuptools]
+packages = ["handyman"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

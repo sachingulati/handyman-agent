@@ -1,7 +1,10 @@
 import os
 from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parent
+# .parent.parent because this module lives inside the handyman/ package:
+# parent is handyman/, parent.parent is the repo root, which is where
+# jobs.db and jobs/ live. Replaced later by a user data directory.
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DB_PATH = PROJECT_ROOT / "jobs.db"
 JOBS_LOG_DIR = PROJECT_ROOT / "jobs"
 JOBS_LOG_DIR.mkdir(exist_ok=True)

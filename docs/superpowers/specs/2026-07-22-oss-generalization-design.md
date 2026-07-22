@@ -634,6 +634,79 @@ close to the 120s ceiling. This is context for how much the local path
 actually saves versus a hosted call, and reinforces that tiering exists
 for good reason.
 
+## Job observability: continuous status (decided 2026-07-22)
+
+**Problem, found by using the tool rather than reading it.** While a job
+runs, `gemma_check` returns only `{job_id, status}`. A running job is a
+black box. Diagnosing a single slow job this session required reading a
+68KB prose log, querying SQLite by hand, and diffing files — the exact
+"audit everything" cost the delegating model should never have to pay.
+
+**Decision: build both a current-state heartbeat and an append-only event
+log.** They answer different questions and are written from one code path
+so they cannot drift.
+
+| | A — heartbeat columns | B — `job_events` table |
+|---|---|---|
+| Answers | where the job is *now* | what actually *happened* |
+| Shape | columns on the `jobs` row | append-only rows |
+| Writes | 1 UPDATE per iteration | ~3-5 INSERTs per iteration |
+| Read by | `gemma_check`, every poll | audits and post-mortems |
+
+**Critical property: zero cost to the delegated model.** Status is written
+by `worker.py` in the job loop — ordinary Python, a SQLite write of tens
+of microseconds against model calls of 5-45 seconds. The model never sees
+it, never generates it, and spends no tokens on it. A design where the
+*model* reports its own progress was considered and rejected for exactly
+this reason: it would add token cost and depend on model compliance.
+
+**Implementation shape.** One `record(conn, job_id, event_type, detail)`
+helper called from each interesting site in `run_job`. It appends the
+event row and updates the heartbeat columns in the same transaction, so
+"latest event" and "current state" can never disagree. `gemma_check`
+returns the heartbeat fields while running, plus the last N events.
+
+**Explicitly deferred: automatic termination.** Termination is already
+bounded four ways — the `TASK_COMPLETE` sentinel, the watchdog's 3
+nudges, `MAX_ITERATIONS`, and the wall-clock cap. The job that motivated
+this (881.6s for work finished at ~190s) completed *correctly*; it was
+slow, not runaway. Building a kill heuristic now would mean tuning it
+blind. Once B's event data exists, where the turns actually go becomes
+measurable, and termination can be designed against real numbers.
+
+## Reasoning-model overhead (measured 2026-07-22)
+
+The local model (`gemma-4`, 12B) advertises a `thinking` capability and
+has it on by default, emitting a `reasoning` block before each turn.
+
+**The control is binary in practice, not graduated.** Measured on
+`/v1/chat/completions` with a real tool schema:
+
+| `reasoning_effort` | Time | Reasoning emitted | Tool call correct |
+|---|---|---|---|
+| unset (default) | 8.5s | 200 chars | yes |
+| `none` | **5.8s** | **0 chars** | yes |
+| `low` | 8.7s | 229 chars | yes |
+| `medium` | 9.2s | 299 chars | yes |
+| `high` | 8.1s | 196 chars | yes |
+
+`low`/`medium`/`high` are indistinguishable from the default; only `none`
+disables it. (`think: false` and `chat_template_kwargs` are ignored on the
+OpenAI-compatible endpoint; `think: false` *does* work on the native
+`/api/chat`.) **Decision: do not disable reasoning** — it is a real
+capability and the knob has no middle setting.
+
+**The cost is driven by ambiguity, not by reasoning itself.** On a clean,
+unambiguous task reasoning cost 2.7s. On one ambiguous instruction it cost
+~14 minutes: a delegation prompt said "fix the imports in four files" and
+then listed edits across three, and the job log shows the model
+re-deriving that contradiction across turns ("*Wait, I counted 3...*").
+
+**Practical rule, and the cheaper lever:** write delegation prompts that
+are internally consistent and state exact counts. Prompt precision buys
+more than disabling reasoning, and costs no capability. Worth surfacing in
+the README's delegation guidance, since users will hit the same trap.
+
 ## Testing plan (agreed this round)
 
 Current state: 127 tests across 11 files, all mocked/unit, **plus** a

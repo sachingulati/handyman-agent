@@ -1,7 +1,7 @@
 import json
 import sys
 
-import server
+from handyman import server
 
 
 def main(argv: list[str]) -> int:
@@ -35,5 +35,10 @@ def main(argv: list[str]) -> int:
     return 1 if "error" in result else 0
 
 
-if __name__ == "__main__":
+def entrypoint() -> None:
+    """Console-script entry point declared in pyproject.toml."""
     sys.exit(main(sys.argv[1:]))
+
+
+if __name__ == "__main__":
+    entrypoint()

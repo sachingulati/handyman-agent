@@ -2,9 +2,9 @@ from pathlib import Path
 
 from mcp.server.fastmcp import FastMCP
 
-import config
-import db
-import worker
+from handyman import config
+from handyman import db
+from handyman import worker
 
 mcp = FastMCP("gemma-agent")
 
