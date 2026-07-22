@@ -574,3 +574,75 @@ def test_run_job_times_out_on_wall_clock(tmp_path):
     job = db.get_job(conn, job_id)
     assert job["status"] == "timeout"
     assert "wall-clock" in job["result_summary"]
+
+
+def test_run_job_records_progress_events_for_chat_tool_and_done(tmp_path):
+    """The progress trail is what a caller reads instead of the log, so the
+    call sites in run_job are load-bearing: deleting one silently blinds
+    gemma_check without failing any other test."""
+    from handyman import progress
+
+    conn, job_id = _job(tmp_path)
+    log_path = tmp_path / "job.log"
+    turns = []
+
+    def chat_fn(messages):
+        turns.append(1)
+        if len(turns) == 1:
+            return {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "function": {
+                            "name": "write_file",
+                            "arguments": '{"path": "a.txt", "content": "x"}',
+                        },
+                    }
+                ],
+            }
+        return {"role": "assistant", "content": "TASK_COMPLETE finished"}
+
+    worker.run_job(
+        conn, job_id, "do a thing", str(tmp_path), log_path,
+        chat_fn=chat_fn, max_iterations=5, max_wall_clock_seconds=60,
+        watchdog_max_retries=3,
+        execute_tool_fn=lambda name, arguments: "ok",
+    )
+
+    events = progress.recent_events(conn, job_id, limit=20)
+    kinds = [e["event_type"] for e in events]
+    assert "chat" in kinds, "run_job must record each chat turn"
+    assert "tool_call" in kinds, "run_job must record each tool call"
+    assert "done" in kinds, "run_job must record completion"
+
+    tool_events = [e for e in events if e["event_type"] == "tool_call"]
+    assert tool_events[0]["detail"] == "write_file"
+
+    hb = progress.heartbeat(conn, job_id)
+    assert hb["iteration"] >= 1
+    assert hb["last_action"] is not None
+
+
+def test_run_job_records_a_nudge_when_the_model_stalls(tmp_path):
+    from handyman import progress
+
+    conn, job_id = _job(tmp_path)
+    log_path = tmp_path / "job.log"
+    turns = []
+
+    def chat_fn(messages):
+        turns.append(1)
+        if len(turns) <= 2:
+            return {"role": "assistant", "content": "just chatting, no marker"}
+        return {"role": "assistant", "content": "TASK_COMPLETE done"}
+
+    worker.run_job(
+        conn, job_id, "do a thing", str(tmp_path), log_path,
+        chat_fn=chat_fn, max_iterations=6, max_wall_clock_seconds=60,
+        watchdog_max_retries=3,
+    )
+
+    kinds = [e["event_type"] for e in progress.recent_events(conn, job_id, limit=20)]
+    assert "nudge" in kinds, "a stalled turn must be recorded as a nudge"

@@ -145,3 +145,56 @@ def test_gemma_cancel_returns_error_dict_when_db_connect_raises(tmp_path, monkey
     result = server.gemma_cancel("some-id")
 
     assert "error" in result
+
+
+def test_gemma_check_reports_progress_for_a_running_job(tmp_path, monkeypatch):
+    """The whole point of the progress trail: a caller must be able to see
+    what a running job is doing without opening its log."""
+    from handyman import progress
+
+    monkeypatch.setattr(config, "DB_PATH", tmp_path / "jobs.db")
+    conn = db.connect(config.DB_PATH)
+    job_id = db.create_job(conn, "do a thing", str(tmp_path))
+    db.update_status(conn, job_id, "running")
+    progress.record(conn, job_id, 1, "chat")
+    progress.record(conn, job_id, 2, "tool_call", "write_file")
+    conn.close()
+
+    result = server.gemma_check(job_id)
+
+    assert result["status"] == "running"
+    assert result["iteration"] == 2
+    assert result["last_action"] == "tool_call write_file"
+    assert result["recent"] == ["1: chat", "2: tool_call write_file"]
+
+
+def test_gemma_check_omits_progress_fields_when_nothing_recorded(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "DB_PATH", tmp_path / "jobs.db")
+    conn = db.connect(config.DB_PATH)
+    job_id = db.create_job(conn, "do a thing", str(tmp_path))
+    conn.close()
+
+    result = server.gemma_check(job_id)
+
+    assert result["status"] == "queued"
+    assert "recent" not in result
+
+
+def test_gemma_check_survives_unreadable_progress_tables(tmp_path, monkeypatch):
+    """A status check must never fail because progress lookup broke - the
+    job's own status is the thing the caller actually needs."""
+    from handyman import progress
+
+    monkeypatch.setattr(config, "DB_PATH", tmp_path / "jobs.db")
+    conn = db.connect(config.DB_PATH)
+    job_id = db.create_job(conn, "do a thing", str(tmp_path))
+    conn.close()
+
+    def boom(*args, **kwargs):
+        raise sqlite3.OperationalError("no such table: job_events")
+
+    monkeypatch.setattr(progress, "heartbeat", boom)
+    result = server.gemma_check(job_id)
+
+    assert result["job_id"] == job_id
+    assert result["status"] == "queued"
