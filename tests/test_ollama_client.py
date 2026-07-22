@@ -82,3 +82,47 @@ def test_pull_model_posts_to_api_pull(monkeypatch):
     ollama_client.pull_model("http://localhost:11434", "some-model")
     assert captured["url"] == "http://localhost:11434/api/pull"
     assert captured["json"] == {"model": "some-model", "stream": False}
+
+
+def test_chat_retries_on_rate_limit_then_succeeds(monkeypatch):
+    """A hosted provider rate-limits per minute and a burst of jobs hits it
+    routinely. These are transient, so a retry turns a failed job into a
+    slow one rather than losing the work."""
+    calls = []
+
+    class _R:
+        def __init__(self, code, payload=None):
+            self.status_code = code
+            self._p = payload or {"choices": [{"message": {"content": "ok"}}]}
+
+        def json(self):
+            return self._p
+
+        def raise_for_status(self):
+            pass
+
+    def fake_post(*a, **k):
+        calls.append(1)
+        return _R(429) if len(calls) < 3 else _R(200)
+
+    monkeypatch.setattr(ollama_client.requests, "post", fake_post)
+    monkeypatch.setattr(ollama_client.time, "sleep", lambda s: None)
+    msg = ollama_client.chat("http://h", "m", [], [])
+    assert msg == {"content": "ok"}
+    assert len(calls) == 3
+
+
+def test_chat_gives_up_after_repeated_rate_limits(monkeypatch):
+    class _R:
+        status_code = 429
+
+        def json(self):
+            return {}
+
+        def raise_for_status(self):
+            pass
+
+    monkeypatch.setattr(ollama_client.requests, "post", lambda *a, **k: _R())
+    monkeypatch.setattr(ollama_client.time, "sleep", lambda s: None)
+    with pytest.raises(ollama_client.OllamaError, match="rate limited"):
+        ollama_client.chat("http://h", "m", [], [])

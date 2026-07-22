@@ -311,6 +311,8 @@ def _make_chat_fn(cfg, model: str):
             cfg.ollama_host, model, messages, TOOL_SCHEMAS,
             timeout=cfg.request_timeout_seconds,
             reasoning_effort=cfg.reasoning_effort,
+            api_key=config.api_key_for(cfg),
+            chat_path=cfg.chat_path,
         )
 
     return chat_fn
@@ -342,8 +344,11 @@ def main(job_id: str) -> None:
         db.update_status(conn, job_id, "running", transcript_path=str(log_path))
 
         base_tier, *escalation = cfg.tiers
-        if not ollama_client.model_is_pulled(cfg.ollama_host, base_tier.model):
-            ollama_client.pull_model(cfg.ollama_host, base_tier.model)
+        # A hosted provider has nothing to pull, and its /api/tags does
+        # not exist - asking would fail the job before it starts.
+        if not config.api_key_for(cfg):
+            if not ollama_client.model_is_pulled(cfg.ollama_host, base_tier.model):
+                ollama_client.pull_model(cfg.ollama_host, base_tier.model)
 
         run_job(
             conn,

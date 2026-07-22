@@ -30,6 +30,11 @@ DEFAULTS = {
     # control is effectively binary: "none" disables it, intermediate
     # settings behave like the default.
     "reasoning_effort": "none",
+    # Hosted providers speak the same OpenAI-compatible shape but mount it
+    # at a different path and need a bearer token. Empty api_key means
+    # local: no auth header, and the model must be pulled before use.
+    "chat_path": "/v1/chat/completions",
+    "api_key_env": "",
 }
 
 # Env var -> (config key, type). Env always wins over the file.
@@ -41,6 +46,8 @@ ENV_OVERRIDES = {
     "HANDYMAN_WATCHDOG_MAX_RETRIES": ("watchdog_max_retries", int),
     "HANDYMAN_REQUEST_TIMEOUT_SECONDS": ("request_timeout_seconds", int),
     "HANDYMAN_REASONING_EFFORT": ("reasoning_effort", str),
+    "HANDYMAN_CHAT_PATH": ("chat_path", str),
+    "HANDYMAN_API_KEY_ENV": ("api_key_env", str),
 }
 
 BASE_TIER_NAME = "small"
@@ -67,6 +74,8 @@ class Config:
     watchdog_max_retries: int
     request_timeout_seconds: int
     reasoning_effort: str
+    chat_path: str
+    api_key_env: str
     tavily_api_key: str | None
     db_path: Path
     jobs_log_dir: Path
@@ -131,7 +140,28 @@ def parse_tiers(raw) -> list:
     return tiers
 
 
+def _load_dotenv() -> None:
+    """Read KEY=VALUE lines from a .env beside the project, without
+    overwriting anything already set in the real environment."""
+    env_file = Path(__file__).resolve().parent.parent / ".env"
+    if not env_file.exists():
+        return
+    for line in env_file.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if line and not line.startswith("#") and "=" in line:
+            key, _, value = line.partition("=")
+            os.environ.setdefault(key.strip(), value.strip())
+
+
+def api_key_for(cfg) -> str | None:
+    """The bearer token for a hosted provider, or None when running local."""
+    if not cfg.api_key_env:
+        return None
+    return os.environ.get(cfg.api_key_env) or None
+
+
 def load(path=None) -> Config:
+    _load_dotenv()
     if path is None:
         path = Path(os.environ.get("HANDYMAN_CONFIG") or default_config_path())
     path = Path(path)

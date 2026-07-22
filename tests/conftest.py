@@ -24,6 +24,8 @@ def make_config(tmp_path, **overrides):
         watchdog_max_retries=3,
         request_timeout_seconds=900,
         reasoning_effort="none",
+        chat_path="/v1/chat/completions",
+        api_key_env="",
         tavily_api_key=None,
         db_path=tmp_path / "jobs.db",
         jobs_log_dir=tmp_path / "jobs",
