@@ -310,6 +310,7 @@ def _make_chat_fn(cfg, model: str):
         return ollama_client.chat(
             cfg.ollama_host, model, messages, TOOL_SCHEMAS,
             timeout=cfg.request_timeout_seconds,
+            reasoning_effort=cfg.reasoning_effort,
         )
 
     return chat_fn

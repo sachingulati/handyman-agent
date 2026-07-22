@@ -5,11 +5,13 @@ class OllamaError(Exception):
     pass
 
 
-def chat(host: str, model: str, messages: list[dict], tools: list[dict], timeout: int = 900) -> dict:
+def chat(host: str, model: str, messages: list[dict], tools: list[dict],
+         timeout: int = 900, reasoning_effort: str | None = None) -> dict:
     try:
         resp = requests.post(
             f"{host}/v1/chat/completions",
-            json={"model": model, "messages": messages, "tools": tools},
+            json={"model": model, "messages": messages, "tools": tools,
+                  **({"reasoning_effort": reasoning_effort} if reasoning_effort else {})},
             timeout=timeout,
         )
     except requests.exceptions.ConnectionError as exc:

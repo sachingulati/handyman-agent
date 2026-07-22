@@ -23,6 +23,7 @@ def make_config(tmp_path, **overrides):
         max_wall_clock_seconds=1200,
         watchdog_max_retries=3,
         request_timeout_seconds=900,
+        reasoning_effort="none",
         tavily_api_key=None,
         db_path=tmp_path / "jobs.db",
         jobs_log_dir=tmp_path / "jobs",

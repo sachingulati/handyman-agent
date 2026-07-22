@@ -24,6 +24,12 @@ DEFAULTS = {
     # minute before any tokens are produced. The old 120s default killed
     # jobs mid-request that were working correctly.
     "request_timeout_seconds": 900,
+    # Reasoning models spend their budget deliberating before acting. On a
+    # large or ambiguous task that can consume the whole request, and the
+    # deliberation has been observed leaking into generated source. The
+    # control is effectively binary: "none" disables it, intermediate
+    # settings behave like the default.
+    "reasoning_effort": "none",
 }
 
 # Env var -> (config key, type). Env always wins over the file.
@@ -34,6 +40,7 @@ ENV_OVERRIDES = {
     "HANDYMAN_MAX_WALL_CLOCK_SECONDS": ("max_wall_clock_seconds", int),
     "HANDYMAN_WATCHDOG_MAX_RETRIES": ("watchdog_max_retries", int),
     "HANDYMAN_REQUEST_TIMEOUT_SECONDS": ("request_timeout_seconds", int),
+    "HANDYMAN_REASONING_EFFORT": ("reasoning_effort", str),
 }
 
 BASE_TIER_NAME = "small"
@@ -59,6 +66,7 @@ class Config:
     max_wall_clock_seconds: int
     watchdog_max_retries: int
     request_timeout_seconds: int
+    reasoning_effort: str
     tavily_api_key: str | None
     db_path: Path
     jobs_log_dir: Path
