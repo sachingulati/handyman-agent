@@ -1,4 +1,5 @@
 import random
+import re
 import time
 
 import requests
@@ -6,6 +7,31 @@ import requests
 
 RATE_LIMIT_RETRIES = 4
 RATE_LIMIT_BASE_DELAY = 4  # seconds; doubles each attempt
+MAX_SUGGESTED_DELAY = 60  # cap on a provider-supplied retry hint
+
+
+def _rate_limit_detail(resp) -> tuple[bool, float | None]:
+    """Inspect a 429 body: is it retryable, and how long should we wait?
+
+    A provider can answer 429 for two very different reasons. A genuine
+    per-minute throttle clears on its own. An input larger than the
+    account's per-request token allowance never will - retrying the same
+    oversized request just fails identically, slower. Only the body
+    distinguishes them.
+    """
+    try:
+        payload = resp.json()
+    except Exception:
+        return True, None
+    if isinstance(payload, list):
+        payload = payload[0] if payload else {}
+    message = str((payload or {}).get("error", {}).get("message", ""))
+
+    if "input_token_count" in message or "input token count" in message.lower():
+        return False, None
+
+    match = re.search(r"retry in ([0-9.]+)s", message)
+    return True, (min(float(match.group(1)), MAX_SUGGESTED_DELAY) if match else None)
 
 
 class OllamaError(Exception):
@@ -35,7 +61,15 @@ def chat(host: str, model: str, messages: list[dict], tools: list[dict],
     for attempt in range(RATE_LIMIT_RETRIES):
         if resp.status_code != 429:
             break
-        delay = RATE_LIMIT_BASE_DELAY * (2 ** attempt) + random.uniform(0, 1)
+        retryable, suggested = _rate_limit_detail(resp)
+        if not retryable:
+            raise OllamaError(
+                "the request is larger than this account's per-request token "
+                "allowance, so retrying cannot help - shorten the task, or "
+                "split it into smaller steps"
+            )
+        delay = suggested if suggested is not None else (
+            RATE_LIMIT_BASE_DELAY * (2 ** attempt) + random.uniform(0, 1))
         time.sleep(delay)
         try:
             resp = requests.post(

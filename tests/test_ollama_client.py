@@ -126,3 +126,58 @@ def test_chat_gives_up_after_repeated_rate_limits(monkeypatch):
     monkeypatch.setattr(ollama_client.time, "sleep", lambda s: None)
     with pytest.raises(ollama_client.OllamaError, match="rate limited"):
         ollama_client.chat("http://h", "m", [], [])
+
+
+def test_chat_does_not_retry_when_the_input_is_too_large(monkeypatch):
+    """A provider answers 429 both for throttling and for an input over the
+    per-request allowance. Only the second is hopeless: retrying the same
+    oversized request fails identically, just slower and mislabelled."""
+    calls = []
+
+    class _R:
+        status_code = 429
+
+        def json(self):
+            return [{"error": {"message":
+                     "Quota exceeded for metric: ...input_token_count, limit: 16000"}}]
+
+        def raise_for_status(self):
+            pass
+
+    def fake_post(*a, **k):
+        calls.append(1)
+        return _R()
+
+    monkeypatch.setattr(ollama_client.requests, "post", fake_post)
+    monkeypatch.setattr(ollama_client.time, "sleep", lambda s: None)
+    with pytest.raises(ollama_client.OllamaError, match="split it into smaller steps"):
+        ollama_client.chat("http://h", "m", [], [])
+    assert len(calls) == 1, "an oversized request must not be retried"
+
+
+def test_chat_honours_a_provider_supplied_retry_delay(monkeypatch):
+    slept = []
+    calls = []
+
+    class _R:
+        def __init__(self, code):
+            self.status_code = code
+
+        def json(self):
+            return {"error": {"message": "rate limited. Please retry in 7.5s"}}
+
+        def raise_for_status(self):
+            pass
+
+    class _OK(_R):
+        def json(self):
+            return {"choices": [{"message": {"content": "ok"}}]}
+
+    def fake_post(*a, **k):
+        calls.append(1)
+        return _R(429) if len(calls) == 1 else _OK(200)
+
+    monkeypatch.setattr(ollama_client.requests, "post", fake_post)
+    monkeypatch.setattr(ollama_client.time, "sleep", lambda s: slept.append(s))
+    ollama_client.chat("http://h", "m", [], [])
+    assert slept == [7.5], f"should wait the suggested 7.5s, waited {slept}"
