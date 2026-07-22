@@ -277,7 +277,7 @@ def run_job(
         log.write("\n[timeout: max iterations exceeded]\n")
 
 
-def execute_tool_call(working_dir: str, name: str, arguments: dict) -> str:
+def execute_tool_call(working_dir: str, name: str, arguments: dict, cfg) -> str:
     try:
         if name == "read_file":
             return tools.read_file(working_dir, arguments["path"])
@@ -294,7 +294,7 @@ def execute_tool_call(working_dir: str, name: str, arguments: dict) -> str:
             return tools.web_fetch(arguments["url"])
         if name == "web_search":
             return json.dumps(
-                tools.web_search(arguments["query"], tavily_api_key=config.TAVILY_API_KEY)
+                tools.web_search(arguments["query"], tavily_api_key=cfg.tavily_api_key)
             )
         return f"error: unknown tool '{name}'"
     except tools.PathJailViolation as exc:
@@ -303,20 +303,18 @@ def execute_tool_call(working_dir: str, name: str, arguments: dict) -> str:
         return f"error: {exc}"
 
 
-def _default_chat_fn(messages: list[dict]) -> dict:
-    return ollama_client.chat(config.OLLAMA_HOST, config.MODEL_NAME, messages, TOOL_SCHEMAS)
+def _make_chat_fn(cfg, model: str):
+    """Bind one configured model into the single-argument callable run_job wants."""
 
+    def chat_fn(messages: list[dict]) -> dict:
+        return ollama_client.chat(cfg.ollama_host, model, messages, TOOL_SCHEMAS)
 
-def _mid_chat_fn(messages: list[dict]) -> dict:
-    return ollama_client.chat(config.OLLAMA_HOST, config.MODEL_NAME_MID, messages, TOOL_SCHEMAS)
-
-
-def _big_chat_fn(messages: list[dict]) -> dict:
-    return ollama_client.chat(config.OLLAMA_HOST, config.MODEL_NAME_BIG, messages, TOOL_SCHEMAS)
+    return chat_fn
 
 
 def main(job_id: str) -> None:
-    conn = db.connect(config.DB_PATH)
+    cfg = config.load()
+    conn = db.connect(cfg.db_path)
     pid = os.getpid()
     db.set_pid(conn, job_id, pid)
 
@@ -325,27 +323,40 @@ def main(job_id: str) -> None:
         if job is None:
             return
 
-        log_path = config.JOBS_LOG_DIR / f"{job_id}.log"
+        if not cfg.tiers:
+            db.update_status(
+                conn, job_id, "error",
+                result_summary=(
+                    "no model tiers configured - create "
+                    f"{config.default_config_path()}"
+                ),
+            )
+            return
+
+        cfg.jobs_log_dir.mkdir(parents=True, exist_ok=True)
+        log_path = cfg.jobs_log_dir / f"{job_id}.log"
         db.update_status(conn, job_id, "running", transcript_path=str(log_path))
 
-        if not ollama_client.model_is_pulled(config.OLLAMA_HOST, config.MODEL_NAME):
-            ollama_client.pull_model(config.OLLAMA_HOST, config.MODEL_NAME)
+        base_tier, *escalation = cfg.tiers
+        if not ollama_client.model_is_pulled(cfg.ollama_host, base_tier.model):
+            ollama_client.pull_model(cfg.ollama_host, base_tier.model)
+
         run_job(
             conn,
             job_id,
             job["task"],
             job["working_dir"],
             log_path,
-            chat_fn=_default_chat_fn,
-            max_iterations=config.MAX_ITERATIONS,
-            max_wall_clock_seconds=config.MAX_WALL_CLOCK_SECONDS,
-            watchdog_max_retries=config.WATCHDOG_MAX_RETRIES,
+            chat_fn=_make_chat_fn(cfg, base_tier.model),
+            max_iterations=cfg.max_iterations,
+            max_wall_clock_seconds=cfg.max_wall_clock_seconds,
+            watchdog_max_retries=cfg.watchdog_max_retries,
             execute_tool_fn=lambda name, arguments: execute_tool_call(
-                job["working_dir"], name, arguments
+                job["working_dir"], name, arguments, cfg
             ),
             escalation_tiers=[
-                (config.CONTEXT_GROWTH_THRESHOLD_MID_TOKENS, "mid", _mid_chat_fn),
-                (config.CONTEXT_GROWTH_THRESHOLD_BIG_TOKENS, "big", _big_chat_fn),
+                (tier.threshold_tokens, tier.name, _make_chat_fn(cfg, tier.model))
+                for tier in escalation
             ],
         )
     except ollama_client.OllamaError as exc:
@@ -360,7 +371,9 @@ def main(job_id: str) -> None:
 
 
 def spawn_worker(job_id: str) -> None:
-    log_path = config.JOBS_LOG_DIR / f"{job_id}.log"
+    cfg = config.load()
+    cfg.jobs_log_dir.mkdir(parents=True, exist_ok=True)
+    log_path = cfg.jobs_log_dir / f"{job_id}.log"
     with open(log_path, "a", encoding="utf-8") as log_file:
         subprocess.Popen(
             # -m, not a file path: executing the file directly would put

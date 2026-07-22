@@ -1,88 +1,157 @@
+"""Configuration: defaults, overlaid by a YAML file, overlaid by env vars.
+
+The tier list is data rather than code so a machine can run one, two or
+three model tiers without a code change. worker.main turns it into the
+(threshold, name, chat_fn) triples run_job already consumes.
+"""
+
 import os
+from dataclasses import dataclass
 from pathlib import Path
 
-# .parent.parent because this module lives inside the handyman/ package:
-# parent is handyman/, parent.parent is the repo root, which is where
-# jobs.db and jobs/ live. Replaced later by a user data directory.
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-DB_PATH = PROJECT_ROOT / "jobs.db"
-JOBS_LOG_DIR = PROJECT_ROOT / "jobs"
-JOBS_LOG_DIR.mkdir(exist_ok=True)
+import yaml
 
-MAX_CONCURRENT_JOBS = int(os.environ.get("GEMMA_MAX_CONCURRENT_JOBS", "3"))
-OLLAMA_HOST = os.environ.get("GEMMA_OLLAMA_HOST", "http://localhost:11434")
-# gemma-12b-gpu:latest is a local-only tag built from a Modelfile
-# (huihui_ai/gemma-4-abliterated:12b + num_gpu 999 + num_ctx 32768 - see
-# D:\ai-tools\ollama-models\gemma-12b-gpu-full.Modelfile). It is NOT
-# pullable from any registry, so worker.py's auto-pull-on-first-use
-# safety net does not apply to it: if this tag is missing (fresh
-# machine, deleted tag), `ollama create gemma-12b-gpu -f Modelfile` must
-# be run manually before jobs will work. Chosen over the registry
-# huihui_ai/gemma-4-abliterated:26b default because 26b's 17GB weights
-# always exceed this machine's 8GB VRAM and partially CPU-offload,
-# which was too slow for practical use.
-#
-# 32768 (not the model's native 131072 max) is deliberate: measured
-# live for the same ~434-token prompt, the larger the configured
-# num_ctx, the slower prompt eval and generation get - a real compute
-# cost tied to the allocated ctx size itself, not a VRAM one (even
-# 131072 barely used more VRAM than 32768, thanks to Gemma 4's sliding-
-# window attention keeping the real KV cache small regardless of
-# nominal context length):
-#   32768:  937.94 tok/s prompt eval, 28.81 tok/s generation
-#   65536:  130.09 tok/s prompt eval, 24.73 tok/s generation
-#   131072: 117.22 tok/s prompt eval, 11.13 tok/s generation
-# There's a sharp cliff on prompt-eval speed between 32768 and 65536,
-# but generation degrades more gradually - see MODEL_NAME_MID/_BIG
-# below, which escalate a job to progressively larger contexts only if
-# its own conversation actually grows that large. 32768 is already
-# ~75x gemma-agent's typical per-task prompt size, so most jobs never
-# pay any of this cost.
-MODEL_NAME = os.environ.get(
-    "GEMMA_MODEL_NAME",
-    "gemma-12b-gpu:latest",
-)
+APP_NAME = "handyman"
 
-# Same build as MODEL_NAME but with num_ctx 65536 - see
-# D:\ai-tools\ollama-models\gemma-12b-gpu-mid.Modelfile. worker.py
-# switches a job to this model, for its remaining iterations only, if
-# the conversation's estimated token count crosses
-# CONTEXT_GROWTH_THRESHOLD_MID_TOKENS. Same local-only/no-auto-pull
-# caveat as MODEL_NAME applies.
-MODEL_NAME_MID = os.environ.get(
-    "GEMMA_MODEL_NAME_MID",
-    "gemma-12b-gpu-mid:latest",
-)
-# ~73% of MODEL_NAME's 32768 context, leaving headroom to still switch
-# and complete the response before actually hitting that ceiling.
-CONTEXT_GROWTH_THRESHOLD_MID_TOKENS = int(
-    os.environ.get("GEMMA_CONTEXT_GROWTH_THRESHOLD_MID_TOKENS", "24000")
-)
+DEFAULTS = {
+    "ollama_host": "http://localhost:11434",
+    "max_concurrent_jobs": 3,
+    "max_iterations": 40,
+    "max_wall_clock_seconds": 20 * 60,
+    "watchdog_max_retries": 3,
+}
 
-# Same build as MODEL_NAME but with num_ctx 131072 (the model's native
-# max) - see D:\ai-tools\ollama-models\gemma-12b-gpu-big.Modelfile.
-# worker.py escalates a job to this model if its conversation grows
-# past MODEL_NAME_MID's own budget. Same local-only/no-auto-pull
-# caveat as MODEL_NAME applies.
-MODEL_NAME_BIG = os.environ.get(
-    "GEMMA_MODEL_NAME_BIG",
-    "gemma-12b-gpu-big:latest",
-)
-# ~73% of MODEL_NAME_MID's 65536 context.
-CONTEXT_GROWTH_THRESHOLD_BIG_TOKENS = int(
-    os.environ.get("GEMMA_CONTEXT_GROWTH_THRESHOLD_BIG_TOKENS", "48000")
-)
+# Env var -> (config key, type). Env always wins over the file.
+ENV_OVERRIDES = {
+    "HANDYMAN_OLLAMA_HOST": ("ollama_host", str),
+    "HANDYMAN_MAX_CONCURRENT_JOBS": ("max_concurrent_jobs", int),
+    "HANDYMAN_MAX_ITERATIONS": ("max_iterations", int),
+    "HANDYMAN_MAX_WALL_CLOCK_SECONDS": ("max_wall_clock_seconds", int),
+    "HANDYMAN_WATCHDOG_MAX_RETRIES": ("watchdog_max_retries", int),
+}
 
-MAX_ITERATIONS = int(os.environ.get("GEMMA_MAX_ITERATIONS", "40"))
-MAX_WALL_CLOCK_SECONDS = int(os.environ.get("GEMMA_MAX_WALL_CLOCK_SECONDS", str(20 * 60)))
-MAX_TOTAL_TOKENS = int(os.environ.get("GEMMA_MAX_TOTAL_TOKENS", "200000"))
-WATCHDOG_MAX_RETRIES = int(os.environ.get("GEMMA_WATCHDOG_MAX_RETRIES", "3"))
+BASE_TIER_NAME = "small"
 
-# Optional: when set, tools.web_search uses Tavily (more reliable,
-# free tier 1000 credits/month) instead of the free DuckDuckGo scraper.
-# GEMMA_TAVILY_API_KEY (gemma-agent-specific) takes priority so a
-# distribution/user can point gemma-agent at its own key or quota; if
-# unset, falls back to a plain TAVILY_API_KEY already in the environment
-# (e.g. one configured for another tool) as a convenience; if neither is
-# set, TAVILY_API_KEY stays None and web_search falls back to DuckDuckGo.
-TAVILY_API_KEY = os.environ.get("GEMMA_TAVILY_API_KEY") or os.environ.get("TAVILY_API_KEY") or None
+
+class ConfigError(Exception):
+    """Raised when a config file is present but unusable."""
+
+
+@dataclass(frozen=True)
+class Tier:
+    name: str
+    model: str
+    threshold_tokens: int
+
+
+@dataclass(frozen=True)
+class Config:
+    tiers: list
+    ollama_host: str
+    max_concurrent_jobs: int
+    max_iterations: int
+    max_wall_clock_seconds: int
+    watchdog_max_retries: int
+    tavily_api_key: str | None
+    db_path: Path
+    jobs_log_dir: Path
+
+
+def default_config_path() -> Path:
+    if os.name == "nt":
+        base = Path(os.environ.get("APPDATA") or Path.home() / "AppData" / "Roaming")
+    else:
+        base = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config")
+    return base / APP_NAME / "config.yaml"
+
+
+def default_data_dir() -> Path:
+    if os.name == "nt":
+        base = Path(os.environ.get("LOCALAPPDATA") or Path.home() / "AppData" / "Local")
+    else:
+        base = Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local" / "share")
+    return base / APP_NAME
+
+
+def parse_tiers(raw) -> list:
+    if raw is None:
+        return []
+    if not isinstance(raw, list):
+        raise ConfigError("'tiers' must be a list")
+    if not 1 <= len(raw) <= 3:
+        raise ConfigError(f"config must define 1 to 3 tiers, got {len(raw)}")
+
+    tiers = []
+    for index, entry in enumerate(raw):
+        if not isinstance(entry, dict):
+            raise ConfigError(f"tier {index} must be a mapping")
+        for key in ("name", "model"):
+            if not entry.get(key):
+                raise ConfigError(f"tier {index} is missing required key '{key}'")
+        tiers.append(
+            Tier(
+                name=str(entry["name"]),
+                model=str(entry["model"]),
+                threshold_tokens=int(entry.get("threshold_tokens", 0)),
+            )
+        )
+
+    # run_job initializes current_tier to db.BASE_TIER, and
+    # try_claim_with_cap refuses to admit a job whose tier differs from a
+    # running one. A differently-named first tier would leave every job on
+    # a tier no config entry matches, silently disabling cross-job tier
+    # blocking - the model-thrashing bug that took 45 reloads to find.
+    if tiers[0].name != BASE_TIER_NAME:
+        raise ConfigError(
+            f"the first tier must be named '{BASE_TIER_NAME}', got '{tiers[0].name}'"
+        )
+    if tiers[0].threshold_tokens != 0:
+        raise ConfigError("the first tier must have threshold_tokens: 0")
+
+    thresholds = [t.threshold_tokens for t in tiers]
+    if thresholds != sorted(thresholds) or len(set(thresholds)) != len(thresholds):
+        raise ConfigError(
+            f"tier threshold_tokens must be strictly ascending, got {thresholds}"
+        )
+    return tiers
+
+
+def load(path=None) -> Config:
+    if path is None:
+        path = Path(os.environ.get("HANDYMAN_CONFIG") or default_config_path())
+    path = Path(path)
+
+    raw = {}
+    if path.exists():
+        loaded = yaml.safe_load(path.read_text(encoding="utf-8"))
+        if loaded is not None:
+            if not isinstance(loaded, dict):
+                raise ConfigError(f"{path} must contain a YAML mapping at the top level")
+            raw = loaded
+
+    values = dict(DEFAULTS)
+    for key in DEFAULTS:
+        if key in raw:
+            values[key] = raw[key]
+    for env_var, (key, caster) in ENV_OVERRIDES.items():
+        if env_var in os.environ:
+            values[key] = caster(os.environ[env_var])
+
+    data_dir = Path(os.environ.get("HANDYMAN_DATA_DIR") or default_data_dir())
+
+    # A handyman-specific key wins so this tool can be pointed at its own
+    # key or quota; a plain TAVILY_API_KEY already in the environment is
+    # accepted as a convenience so a second key isn't required.
+    tavily = (
+        os.environ.get("HANDYMAN_TAVILY_API_KEY")
+        or os.environ.get("TAVILY_API_KEY")
+        or None
+    )
+
+    return Config(
+        tiers=parse_tiers(raw.get("tiers")),
+        tavily_api_key=tavily,
+        db_path=Path(os.environ.get("HANDYMAN_DB_PATH") or data_dir / "jobs.db"),
+        jobs_log_dir=Path(os.environ.get("HANDYMAN_JOBS_LOG_DIR") or data_dir / "jobs"),
+        **values,
+    )

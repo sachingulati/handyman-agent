@@ -1,6 +1,7 @@
 import subprocess
 import uuid
 
+from conftest import make_config
 from handyman import config
 from handyman import db
 from handyman import ollama_client
@@ -13,36 +14,33 @@ def _spawn_recorder(monkeypatch):
 
 def _use_tmp_db(monkeypatch, tmp_path):
     db_path = tmp_path / "jobs.db"
-    monkeypatch.setattr(config, "DB_PATH", db_path)
+    monkeypatch.setattr(config, "load", lambda *a, **k: make_config(tmp_path, db_path=db_path))
     return db.connect(db_path)
 
 
 def test_execute_tool_call_write_and_read(tmp_path):
-    result = worker.execute_tool_call(
-        str(tmp_path), "write_file", {"path": "a.txt", "content": "hello"}
-    )
+    result = worker.execute_tool_call(str(tmp_path), "write_file", {"path": "a.txt", "content": "hello"}
+    , make_config(tmp_path))
     assert "wrote" in result
-    result = worker.execute_tool_call(str(tmp_path), "read_file", {"path": "a.txt"})
+    result = worker.execute_tool_call(str(tmp_path), "read_file", {"path": "a.txt"}, make_config(tmp_path))
     assert result == "hello"
 
 
 def test_execute_tool_call_bash_returns_json(tmp_path):
     import sys
 
-    result = worker.execute_tool_call(
-        str(tmp_path), "bash", {"command": f'{sys.executable} -c "print(42)"'}
-    )
+    result = worker.execute_tool_call(str(tmp_path), "bash", {"command": f'{sys.executable} -c "print(42)"'}
+    , make_config(tmp_path))
     assert "42" in result
 
 
 def test_execute_tool_call_unknown_tool_returns_error(tmp_path):
-    result = worker.execute_tool_call(str(tmp_path), "not_a_real_tool", {})
+    result = worker.execute_tool_call(str(tmp_path), "not_a_real_tool", {}, make_config(tmp_path))
     assert "error" in result
     assert "unknown tool" in result
 
 
 def test_execute_tool_call_web_search_passes_configured_tavily_key(tmp_path, monkeypatch):
-    monkeypatch.setattr(config, "TAVILY_API_KEY", "tvly-configured-key")
     captured = {}
 
     def fake_web_search(query, tavily_api_key=None):
@@ -53,22 +51,24 @@ def test_execute_tool_call_web_search_passes_configured_tavily_key(tmp_path, mon
     from handyman import tools
     monkeypatch.setattr(tools, "web_search", fake_web_search)
 
-    worker.execute_tool_call(str(tmp_path), "web_search", {"query": "cats"})
+    worker.execute_tool_call(
+        str(tmp_path), "web_search", {"query": "cats"},
+        make_config(tmp_path, tavily_api_key="tvly-configured-key"),
+    )
 
     assert captured["query"] == "cats"
     assert captured["tavily_api_key"] == "tvly-configured-key"
 
 
 def test_execute_tool_call_path_jail_violation_returns_error_not_raise(tmp_path):
-    result = worker.execute_tool_call(
-        str(tmp_path), "write_file", {"path": "../escape.txt", "content": "x"}
-    )
+    result = worker.execute_tool_call(str(tmp_path), "write_file", {"path": "../escape.txt", "content": "x"}
+    , make_config(tmp_path))
     assert "error" in result
     assert "escapes" in result
 
 
 def test_execute_tool_call_missing_file_returns_error_not_raise(tmp_path):
-    result = worker.execute_tool_call(str(tmp_path), "read_file", {"path": "nope.txt"})
+    result = worker.execute_tool_call(str(tmp_path), "read_file", {"path": "nope.txt"}, make_config(tmp_path))
     assert "error" in result
     assert "no such file" in result
 
@@ -77,7 +77,7 @@ def test_execute_tool_call_missing_file_returns_error_not_raise(tmp_path):
 
 
 def test_spawn_worker_redirects_stdout_and_stderr_to_job_log(monkeypatch, tmp_path):
-    monkeypatch.setattr(config, "JOBS_LOG_DIR", tmp_path)
+    monkeypatch.setattr(config, "load", lambda *a, **k: make_config(tmp_path, jobs_log_dir=tmp_path))
     job_id = uuid.uuid4().hex
 
     captured = {}

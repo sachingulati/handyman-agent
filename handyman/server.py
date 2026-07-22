@@ -23,16 +23,17 @@ def gemma_delegate(task: str, working_dir: str) -> dict:
     don't need Claude's own reasoning. Returns immediately with a job_id —
     call gemma_check(job_id) later to see progress or get the result.
     """
+    cfg = config.load()
     if not Path(working_dir).is_dir():
         return {"error": f"working_dir does not exist: {working_dir}"}
 
     conn = None
     try:
-        conn = db.connect(config.DB_PATH)
+        conn = db.connect(cfg.db_path)
         db.reap_dead_running_jobs(conn)
         job_id = db.create_job(conn, task, working_dir)
         claimed = db.try_claim_with_cap(
-            conn, job_id, pid=0, max_concurrent=config.MAX_CONCURRENT_JOBS
+            conn, job_id, pid=0, max_concurrent=cfg.max_concurrent_jobs
         )
 
         if claimed:
@@ -55,9 +56,10 @@ def gemma_delegate(task: str, working_dir: str) -> dict:
 @mcp.tool()
 def gemma_check(job_id: str) -> dict:
     """Check the status of a job started with gemma_delegate."""
+    cfg = config.load()
     conn = None
     try:
-        conn = db.connect(config.DB_PATH)
+        conn = db.connect(cfg.db_path)
         db.reap_dead_running_jobs(conn)
         job = db.get_job(conn, job_id)
     except Exception as exc:
@@ -78,7 +80,7 @@ def gemma_check(job_id: str) -> dict:
     # because the progress tables are missing or unreadable.
     conn = None
     try:
-        conn = db.connect(config.DB_PATH)
+        conn = db.connect(cfg.db_path)
         hb = progress.heartbeat(conn, job_id)
         if hb:
             response["iteration"] = hb["iteration"]
@@ -101,9 +103,10 @@ def gemma_check(job_id: str) -> dict:
 @mcp.tool()
 def gemma_cancel(job_id: str) -> dict:
     """Cancel a running or queued job started with gemma_delegate."""
+    cfg = config.load()
     conn = None
     try:
-        conn = db.connect(config.DB_PATH)
+        conn = db.connect(cfg.db_path)
         ok = db.request_cancel(conn, job_id)
     except Exception as exc:
         return {"error": str(exc)}
@@ -117,5 +120,5 @@ def gemma_cancel(job_id: str) -> dict:
 
 
 if __name__ == "__main__":
-    db.connect(config.DB_PATH).close()  # ensure schema exists at startup
+    db.connect(config.load().db_path).close()  # ensure schema exists at startup
     mcp.run()

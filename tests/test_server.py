@@ -1,17 +1,18 @@
 import sqlite3
 
+from conftest import make_config
 from handyman import config
 from handyman import db
 from handyman import server
 def test_gemma_delegate_rejects_missing_working_dir(tmp_path, monkeypatch):
-    monkeypatch.setattr(config, "DB_PATH", tmp_path / "jobs.db")
+    monkeypatch.setattr(config, "load", lambda *a, **k: make_config(tmp_path, db_path=tmp_path / "jobs.db"))
     result = server.gemma_delegate("do a thing", str(tmp_path / "does-not-exist"))
     assert "error" in result
 
 
 def test_gemma_delegate_spawns_when_under_cap(tmp_path, monkeypatch):
-    monkeypatch.setattr(config, "DB_PATH", tmp_path / "jobs.db")
-    monkeypatch.setattr(config, "MAX_CONCURRENT_JOBS", 3)
+    monkeypatch.setattr(config, "load", lambda *a, **k: make_config(tmp_path, db_path=tmp_path / "jobs.db"))
+    monkeypatch.setattr(config, "load", lambda *a, **k: make_config(tmp_path, db_path=tmp_path / "jobs.db", max_concurrent_jobs=3))
     spawned = []
     monkeypatch.setattr(server, "_spawn_worker", lambda job_id: spawned.append(job_id))
 
@@ -22,8 +23,8 @@ def test_gemma_delegate_spawns_when_under_cap(tmp_path, monkeypatch):
 
 
 def test_gemma_delegate_queues_when_at_cap(tmp_path, monkeypatch):
-    monkeypatch.setattr(config, "DB_PATH", tmp_path / "jobs.db")
-    monkeypatch.setattr(config, "MAX_CONCURRENT_JOBS", 1)
+    monkeypatch.setattr(config, "load", lambda *a, **k: make_config(tmp_path, db_path=tmp_path / "jobs.db"))
+    monkeypatch.setattr(config, "load", lambda *a, **k: make_config(tmp_path, db_path=tmp_path / "jobs.db", max_concurrent_jobs=1))
     spawned = []
     monkeypatch.setattr(server, "_spawn_worker", lambda job_id: spawned.append(job_id))
 
@@ -36,8 +37,8 @@ def test_gemma_delegate_queues_when_at_cap(tmp_path, monkeypatch):
 
 
 def test_gemma_check_returns_status_and_summary_when_terminal(tmp_path, monkeypatch):
-    monkeypatch.setattr(config, "DB_PATH", tmp_path / "jobs.db")
-    conn = db.connect(config.DB_PATH)
+    monkeypatch.setattr(config, "load", lambda *a, **k: make_config(tmp_path, db_path=tmp_path / "jobs.db"))
+    conn = db.connect(config.load().db_path)
     job_id = db.create_job(conn, "t", str(tmp_path))
     db.update_status(conn, job_id, "done", result_summary="all finished")
     conn.close()
@@ -48,8 +49,8 @@ def test_gemma_check_returns_status_and_summary_when_terminal(tmp_path, monkeypa
 
 
 def test_gemma_check_omits_summary_when_running(tmp_path, monkeypatch):
-    monkeypatch.setattr(config, "DB_PATH", tmp_path / "jobs.db")
-    conn = db.connect(config.DB_PATH)
+    monkeypatch.setattr(config, "load", lambda *a, **k: make_config(tmp_path, db_path=tmp_path / "jobs.db"))
+    conn = db.connect(config.load().db_path)
     job_id = db.create_job(conn, "t", str(tmp_path))
     db.update_status(conn, job_id, "running")
     conn.close()
@@ -60,35 +61,35 @@ def test_gemma_check_omits_summary_when_running(tmp_path, monkeypatch):
 
 
 def test_gemma_check_unknown_job_returns_error(tmp_path, monkeypatch):
-    monkeypatch.setattr(config, "DB_PATH", tmp_path / "jobs.db")
-    db.connect(config.DB_PATH).close()
+    monkeypatch.setattr(config, "load", lambda *a, **k: make_config(tmp_path, db_path=tmp_path / "jobs.db"))
+    db.connect(config.load().db_path).close()
     result = server.gemma_check("nope")
     assert "error" in result
 
 
 def test_gemma_cancel_sets_flag(tmp_path, monkeypatch):
-    monkeypatch.setattr(config, "DB_PATH", tmp_path / "jobs.db")
-    conn = db.connect(config.DB_PATH)
+    monkeypatch.setattr(config, "load", lambda *a, **k: make_config(tmp_path, db_path=tmp_path / "jobs.db"))
+    conn = db.connect(config.load().db_path)
     job_id = db.create_job(conn, "t", str(tmp_path))
     conn.close()
 
     result = server.gemma_cancel(job_id)
     assert result["status"] == "cancel_requested"
 
-    conn = db.connect(config.DB_PATH)
+    conn = db.connect(config.load().db_path)
     assert db.is_cancel_requested(conn, job_id) is True
 
 
 def test_gemma_cancel_unknown_job_returns_error(tmp_path, monkeypatch):
-    monkeypatch.setattr(config, "DB_PATH", tmp_path / "jobs.db")
-    db.connect(config.DB_PATH).close()
+    monkeypatch.setattr(config, "load", lambda *a, **k: make_config(tmp_path, db_path=tmp_path / "jobs.db"))
+    db.connect(config.load().db_path).close()
     result = server.gemma_cancel("nope")
     assert "error" in result
 
 
 def test_gemma_delegate_marks_job_error_when_spawn_fails_after_claim(tmp_path, monkeypatch):
-    monkeypatch.setattr(config, "DB_PATH", tmp_path / "jobs.db")
-    monkeypatch.setattr(config, "MAX_CONCURRENT_JOBS", 3)
+    monkeypatch.setattr(config, "load", lambda *a, **k: make_config(tmp_path, db_path=tmp_path / "jobs.db"))
+    monkeypatch.setattr(config, "load", lambda *a, **k: make_config(tmp_path, db_path=tmp_path / "jobs.db", max_concurrent_jobs=3))
 
     def _boom(job_id):
         raise OSError("failed to launch interpreter")
@@ -100,7 +101,7 @@ def test_gemma_delegate_marks_job_error_when_spawn_fails_after_claim(tmp_path, m
     assert result["status"] == "error"
     job_id = result["job_id"]
 
-    conn = db.connect(config.DB_PATH)
+    conn = db.connect(config.load().db_path)
     job = db.get_job(conn, job_id)
     conn.close()
     assert job["status"] == "error"
@@ -108,7 +109,7 @@ def test_gemma_delegate_marks_job_error_when_spawn_fails_after_claim(tmp_path, m
 
 
 def test_gemma_delegate_returns_error_dict_when_db_connect_raises(tmp_path, monkeypatch):
-    monkeypatch.setattr(config, "DB_PATH", tmp_path / "jobs.db")
+    monkeypatch.setattr(config, "load", lambda *a, **k: make_config(tmp_path, db_path=tmp_path / "jobs.db"))
 
     def _boom(path):
         raise sqlite3.OperationalError("unable to open database file")
@@ -122,7 +123,7 @@ def test_gemma_delegate_returns_error_dict_when_db_connect_raises(tmp_path, monk
 
 
 def test_gemma_check_returns_error_dict_when_db_connect_raises(tmp_path, monkeypatch):
-    monkeypatch.setattr(config, "DB_PATH", tmp_path / "jobs.db")
+    monkeypatch.setattr(config, "load", lambda *a, **k: make_config(tmp_path, db_path=tmp_path / "jobs.db"))
 
     def _boom(path):
         raise sqlite3.OperationalError("unable to open database file")
@@ -135,7 +136,7 @@ def test_gemma_check_returns_error_dict_when_db_connect_raises(tmp_path, monkeyp
 
 
 def test_gemma_cancel_returns_error_dict_when_db_connect_raises(tmp_path, monkeypatch):
-    monkeypatch.setattr(config, "DB_PATH", tmp_path / "jobs.db")
+    monkeypatch.setattr(config, "load", lambda *a, **k: make_config(tmp_path, db_path=tmp_path / "jobs.db"))
 
     def _boom(path):
         raise sqlite3.OperationalError("unable to open database file")
@@ -152,8 +153,8 @@ def test_gemma_check_reports_progress_for_a_running_job(tmp_path, monkeypatch):
     what a running job is doing without opening its log."""
     from handyman import progress
 
-    monkeypatch.setattr(config, "DB_PATH", tmp_path / "jobs.db")
-    conn = db.connect(config.DB_PATH)
+    monkeypatch.setattr(config, "load", lambda *a, **k: make_config(tmp_path, db_path=tmp_path / "jobs.db"))
+    conn = db.connect(config.load().db_path)
     job_id = db.create_job(conn, "do a thing", str(tmp_path))
     db.update_status(conn, job_id, "running")
     progress.record(conn, job_id, 1, "chat")
@@ -169,8 +170,8 @@ def test_gemma_check_reports_progress_for_a_running_job(tmp_path, monkeypatch):
 
 
 def test_gemma_check_omits_progress_fields_when_nothing_recorded(tmp_path, monkeypatch):
-    monkeypatch.setattr(config, "DB_PATH", tmp_path / "jobs.db")
-    conn = db.connect(config.DB_PATH)
+    monkeypatch.setattr(config, "load", lambda *a, **k: make_config(tmp_path, db_path=tmp_path / "jobs.db"))
+    conn = db.connect(config.load().db_path)
     job_id = db.create_job(conn, "do a thing", str(tmp_path))
     conn.close()
 
@@ -185,8 +186,8 @@ def test_gemma_check_survives_unreadable_progress_tables(tmp_path, monkeypatch):
     job's own status is the thing the caller actually needs."""
     from handyman import progress
 
-    monkeypatch.setattr(config, "DB_PATH", tmp_path / "jobs.db")
-    conn = db.connect(config.DB_PATH)
+    monkeypatch.setattr(config, "load", lambda *a, **k: make_config(tmp_path, db_path=tmp_path / "jobs.db"))
+    conn = db.connect(config.load().db_path)
     job_id = db.create_job(conn, "do a thing", str(tmp_path))
     conn.close()
 
