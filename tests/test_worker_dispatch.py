@@ -82,7 +82,10 @@ def test_spawn_worker_redirects_stdout_and_stderr_to_job_log(monkeypatch, tmp_pa
 
     captured = {}
 
-    def fake_popen(args, stdout=None, stderr=None, creationflags=None):
+    # **kwargs, not a fixed signature: procutil supplies creationflags on
+    # Windows and start_new_session on POSIX, and this test is about the
+    # stdout/stderr redirection, not the platform flags.
+    def fake_popen(args, stdout=None, stderr=None, **kwargs):
         captured["stdout"] = stdout
         captured["stderr"] = stderr
         stdout.write("pre-crash output that must not be lost\n")

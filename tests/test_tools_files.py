@@ -1,3 +1,4 @@
+import os
 import pytest
 from pathlib import Path
 
@@ -69,6 +70,11 @@ def test_path_escape_via_midpath_dotdot_is_rejected(tmp_path):
     assert not outside.exists()
 
 
+@pytest.mark.skipif(
+    os.name != "nt",
+    reason="Windows-only escape vector; on POSIX these strings name a "
+           "file inside the jail rather than escaping it",
+)
 def test_path_escape_via_backslash_dotdot_is_rejected(tmp_path):
     """Escape via backslash-style traversal: '..\\..\\escape.txt'."""
     outside = tmp_path.parent.parent / "escape.txt"
@@ -79,6 +85,11 @@ def test_path_escape_via_backslash_dotdot_is_rejected(tmp_path):
     assert not outside.exists()
 
 
+@pytest.mark.skipif(
+    os.name != "nt",
+    reason="Windows-only escape vector; on POSIX these strings name a "
+           "file inside the jail rather than escaping it",
+)
 def test_path_escape_via_mixed_slash_traversal_is_rejected(tmp_path):
     """Escape via mixed forward/backslash traversal: 'sub\\../../escape.txt'."""
     (tmp_path / "sub").mkdir()
@@ -90,6 +101,11 @@ def test_path_escape_via_mixed_slash_traversal_is_rejected(tmp_path):
     assert not outside.exists()
 
 
+@pytest.mark.skipif(
+    os.name != "nt",
+    reason="Windows-only escape vector; on POSIX these strings name a "
+           "file inside the jail rather than escaping it",
+)
 def test_path_escape_via_different_drive_is_rejected(tmp_path):
     """Escape via different-drive absolute path (e.g., 'D:\\escape.txt' when tmp_path is on C:)."""
     tmp_drive = Path(str(tmp_path)).drive
@@ -108,6 +124,11 @@ def test_path_escape_via_different_drive_is_rejected(tmp_path):
     assert not target.exists()
 
 
+@pytest.mark.skipif(
+    os.name != "nt",
+    reason="Windows-only escape vector; on POSIX these strings name a "
+           "file inside the jail rather than escaping it",
+)
 def test_path_escape_via_unc_path_is_rejected(tmp_path):
     """Escape via UNC path: '\\\\server\\share\\escape.txt'."""
     with pytest.raises(tools.PathJailViolation):
