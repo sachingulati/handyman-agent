@@ -29,7 +29,7 @@ def test_execute_tool_call_write_and_read(tmp_path):
 def test_execute_tool_call_bash_returns_json(tmp_path):
     import sys
 
-    result = worker.execute_tool_call(str(tmp_path), "bash", {"command": f'{sys.executable} -c "print(42)"'}
+    result = worker.execute_tool_call(str(tmp_path), "bash", {"command": f'"{sys.executable}" -c "print(42)"'}
     , make_config(tmp_path))
     assert "42" in result
 

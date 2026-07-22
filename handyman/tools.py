@@ -54,9 +54,10 @@ def edit_file(working_dir: str, path: str, old_str: str, new_str: str) -> str:
 
 def run_bash(working_dir: str, command: str, timeout: int = 60) -> dict:
     root = Path(working_dir).resolve()
+    argv, use_shell = procutil.shell_command(command)
     process = subprocess.Popen(
-        command,
-        shell=True,
+        argv,
+        shell=use_shell,
         cwd=str(root),
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,

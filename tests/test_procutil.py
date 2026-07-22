@@ -71,3 +71,35 @@ def test_kill_process_tree_is_quiet_for_a_dead_pid():
     )
     process.wait()
     procutil.kill_process_tree(process.pid)  # must not raise
+
+
+def test_shell_command_uses_a_posix_shell_when_available(monkeypatch):
+    """`shell=True` resolves to cmd.exe on Windows, where single quotes do
+    not quote, `|` inside them is a pipe, and forward-slash executable
+    paths fail. Three real commands died that way, each looking like a
+    model error. Prefer a POSIX shell when one exists."""
+    monkeypatch.setattr(os, "name", "nt")
+    monkeypatch.setattr(procutil.shutil, "which", lambda name: r"C:\Git\bin\bash.exe"
+                        if name == "bash" else None)
+    argv, use_shell = procutil.shell_command("echo 'a|b'")
+    assert use_shell is False
+    assert argv[0].endswith("bash.exe")
+    assert argv[1] == "-c"
+    assert argv[2] == "echo 'a|b'"
+
+
+def test_shell_command_falls_back_to_the_platform_shell(monkeypatch):
+    monkeypatch.setattr(os, "name", "nt")
+    monkeypatch.setattr(procutil.shutil, "which", lambda name: None)
+    argv, use_shell = procutil.shell_command("dir")
+    assert use_shell is True
+    assert argv == "dir"
+
+
+def test_shell_command_on_posix_uses_sh_directly(monkeypatch):
+    monkeypatch.setattr(os, "name", "posix")
+    monkeypatch.setattr(procutil.shutil, "which", lambda name: "/bin/bash"
+                        if name == "bash" else None)
+    argv, use_shell = procutil.shell_command("echo hi")
+    assert use_shell is False
+    assert argv == ["/bin/bash", "-c", "echo hi"]

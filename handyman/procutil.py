@@ -3,6 +3,7 @@ Every OS-specific branch lives here so the branches can be tested by patching
 os.name in one place.
 """
 import os
+import shutil
 import signal
 import subprocess
 
@@ -72,3 +73,24 @@ def kill_process_tree(pid):
             os.killpg(os.getpgid(pid), signal.SIGKILL)
         except (ProcessLookupError, PermissionError):
             pass
+
+
+def shell_command(command: str):
+    """Turn a shell string into (argv_or_string, use_shell).
+
+    `shell=True` picks the platform shell, which on Windows is cmd.exe.
+    That is not a dialect difference to shrug at: single quotes do not
+    quote, `|` inside them is still a pipe, and an executable path with
+    forward slashes is not found. Commands written as ordinary POSIX shell
+    fail there in ways that read as model incompetence rather than a
+    platform mismatch.
+
+    So prefer a real POSIX shell when the machine has one - Git for
+    Windows ships bash - and fall back to the platform default only when
+    it does not.
+    """
+    for candidate in ("bash", "sh"):
+        found = shutil.which(candidate)
+        if found:
+            return [found, "-c", command], False
+    return command, True
