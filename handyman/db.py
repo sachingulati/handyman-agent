@@ -1,44 +1,12 @@
-import os
 import sqlite3
 import uuid
 from datetime import datetime, timezone
 
+from handyman.procutil import is_pid_alive  # re-exported: db.is_pid_alive is a documented call site
+
 
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
-
-
-def is_pid_alive(pid: int) -> bool:
-    """Best-effort check for whether a process id is still running."""
-    if not pid:
-        return False
-    if os.name == "nt":
-        import ctypes
-
-        PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
-        STILL_ACTIVE = 259
-        handle = ctypes.windll.kernel32.OpenProcess(
-            PROCESS_QUERY_LIMITED_INFORMATION, False, pid
-        )
-        if not handle:
-            return False
-        try:
-            # OpenProcess can succeed for a process that has already
-            # exited but whose object hasn't been torn down yet (e.g. a
-            # subprocess.Popen still holding its own handle) - the exit
-            # code is the only reliable liveness signal.
-            exit_code = ctypes.c_ulong(0)
-            ok = ctypes.windll.kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code))
-            return bool(ok) and exit_code.value == STILL_ACTIVE
-        finally:
-            ctypes.windll.kernel32.CloseHandle(handle)
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    return True
 
 
 def reap_dead_running_jobs(conn: sqlite3.Connection) -> None:

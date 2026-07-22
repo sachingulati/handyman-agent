@@ -5,6 +5,8 @@ from urllib.parse import parse_qs, urlparse
 
 import requests
 
+from handyman import procutil
+
 
 class PathJailViolation(Exception):
     pass
@@ -59,25 +61,13 @@ def run_bash(working_dir: str, command: str, timeout: int = 60) -> dict:
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
+        **procutil.process_group_kwargs(),
     )
     try:
         stdout, stderr = process.communicate(timeout=timeout)
         return {"stdout": stdout, "stderr": stderr, "return_code": process.returncode}
     except subprocess.TimeoutExpired:
-        # process.kill() alone only kills the immediate child. With shell=True
-        # that child is "cmd.exe /c <command>" (Windows) or "/bin/sh -c
-        # <command>" (POSIX) — the actual command runs as a grandchild that
-        # survives, and the communicate() below would then block until that
-        # orphan exits on its own. taskkill /T walks Windows' parent-child
-        # bookkeeping to kill the whole tree rooted at this pid.
-        try:
-            subprocess.run(
-                ["taskkill", "/T", "/F", "/PID", str(process.pid)],
-                capture_output=True,
-                text=True,
-            )
-        except FileNotFoundError:
-            process.kill()  # non-Windows fallback: kills the immediate child only
+        procutil.kill_process_tree(process.pid)
         stdout, stderr = process.communicate()
         stderr = (stderr or "") + f"\n[timed out after {timeout}s]"
         return {"stdout": stdout or "", "stderr": stderr, "return_code": -1}

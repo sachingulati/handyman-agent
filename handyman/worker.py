@@ -9,6 +9,7 @@ from pathlib import Path
 from handyman import config
 from handyman import db
 from handyman import ollama_client
+from handyman import procutil
 from handyman import progress
 from handyman import tools
 
@@ -359,12 +360,6 @@ def main(job_id: str) -> None:
 
 
 def spawn_worker(job_id: str) -> None:
-    # CREATE_NO_WINDOW suppresses the console window python.exe (a
-    # console-subsystem binary) would otherwise pop up for a detached
-    # child. DETACHED_PROCESS is documented by Windows as mutually
-    # exclusive with CREATE_NO_WINDOW - combining them produced a brief
-    # window flash instead of reliable suppression.
-    creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
     log_path = config.JOBS_LOG_DIR / f"{job_id}.log"
     with open(log_path, "a", encoding="utf-8") as log_file:
         subprocess.Popen(
@@ -374,7 +369,7 @@ def spawn_worker(job_id: str) -> None:
             [sys.executable, "-m", "handyman.worker", job_id],
             stdout=log_file,
             stderr=subprocess.STDOUT,
-            creationflags=creationflags,
+            **procutil.detached_kwargs(),
         )
 
 
