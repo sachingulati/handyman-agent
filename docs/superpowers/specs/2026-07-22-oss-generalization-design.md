@@ -707,6 +707,65 @@ are internally consistent and state exact counts. Prompt precision buys
 more than disabling reasoning, and costs no capability. Worth surfacing in
 the README's delegation guidance, since users will hit the same trap.
 
+## `run_bash` is not shell-portable (found 2026-07-22, three live reproductions)
+
+**Severity: high. This is the biggest cross-platform defect found so far,
+and it is silent.**
+
+`tools.run_bash` calls `subprocess.Popen(command, shell=True)`. On POSIX
+that resolves to `/bin/sh`; on Windows it resolves to **cmd.exe**. These
+are not interchangeable, and the differences hit ordinary commands:
+
+| Construct | POSIX `/bin/sh` | Windows cmd.exe |
+|---|---|---|
+| `'single quotes'` | quotes the content | **does not quote at all** |
+| `\|` inside quotes | literal character | **parsed as a pipe** |
+| `a/b/c.exe` | runs | **not recognized** (needs backslashes) |
+| `dir/*.py` | shell expands the glob | passed through literally |
+
+**Three reproductions, all in one session, all from commands that are
+correct POSIX shell:**
+
+1. `sed -E 's/(config\|db\|server)/x/' tests/*.py`
+   -> `'db' is not recognized as an internal or external command`, exit 255.
+   cmd.exe read the regex alternation as a pipeline.
+2. `.venv/Scripts/python.exe script.py`
+   -> `'.venv' is not recognized`. Forward slashes are not accepted for
+   the executable path.
+3. The same command with backslashes succeeded in 27.8s.
+
+**Why this is worse than a portability footnote.** The *model* writes
+these commands. When one fails, the failure surfaces as a confusing
+stderr string attributed to a job, so it reads as model incompetence
+rather than a platform defect. In this session the controller was two
+failures deep before checking `return_code`/`stderr` closely enough to
+tell them apart - while actively auditing. An ordinary user would
+conclude the local agent is broken and stop using it.
+
+It also silently biases every delegation: the model naturally writes
+POSIX-shell idioms (quoting, pipes, globs, `&&`), which is precisely the
+set that breaks on the platform this project was developed on.
+
+**Fix directions (decide during implementation, not ad hoc):**
+
+- Drop `shell=True` and accept an argv list, losing shell features but
+  gaining exact, portable behaviour; or
+- Invoke a known shell explicitly (`bash -c` where available, documenting
+  the dependency); or
+- Keep `shell=True` but document hard which constructs are portable, and
+  have the system prompt steer the model toward them.
+
+**Portable pattern that worked, worth recommending regardless:** stage a
+script file and invoke it with a bare interpreter call containing no
+shell metacharacters. That is how the failing transformation was finally
+completed.
+
+**Related, same function:** `run_bash`'s timeout kill is also
+Windows-only (`taskkill /T /F` with no POSIX branch) - see the
+cross-platform process-utils item in the Architecture section. Both
+defects live in `run_bash`; this one is the more damaging because it is
+silent and affects every command, not only timed-out ones.
+
 ## Testing plan (agreed this round)
 
 Current state: 127 tests across 11 files, all mocked/unit, **plus** a
