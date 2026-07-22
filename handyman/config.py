@@ -24,12 +24,23 @@ DEFAULTS = {
     # minute before any tokens are produced. The old 120s default killed
     # jobs mid-request that were working correctly.
     "request_timeout_seconds": 900,
-    # Reasoning models spend their budget deliberating before acting. On a
-    # large or ambiguous task that can consume the whole request, and the
-    # deliberation has been observed leaking into generated source. The
-    # control is effectively binary: "none" disables it, intermediate
-    # settings behave like the default.
-    "reasoning_effort": "none",
+    # Empty means "send nothing and let the provider decide", which is the
+    # right default: the setting is a real trade-off, not a fix.
+    #
+    # Leaving reasoning ON lets the model work things out for itself, so
+    # instructions can be shorter - and writing exhaustive instructions is
+    # the main cost of delegating at all.
+    #
+    # Turning it OFF ("none") is worth reaching for when a model is
+    # observed deliberating instead of acting: measured cases include a
+    # job producing zero tool calls in 28 minutes, and deliberation
+    # leaking into generated source as a syntax error. It also removed
+    # ~54% of accumulated context.
+    #
+    # The control is binary where supported - low/medium/high behave like
+    # the default. Some hosted providers reject the field outright, so
+    # leave it empty for those.
+    "reasoning_effort": "",
     # Hosted providers speak the same OpenAI-compatible shape but mount it
     # at a different path and need a bearer token. Empty api_key means
     # local: no auth header, and the model must be pulled before use.
