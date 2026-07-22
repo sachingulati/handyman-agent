@@ -1,10 +1,8 @@
 import sqlite3
 
-import config
-import db
-import server
-
-
+from handyman import config
+from handyman import db
+from handyman import server
 def test_gemma_delegate_rejects_missing_working_dir(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "DB_PATH", tmp_path / "jobs.db")
     result = server.gemma_delegate("do a thing", str(tmp_path / "does-not-exist"))

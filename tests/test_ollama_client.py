@@ -1,9 +1,7 @@
 import pytest
 import requests
 
-import ollama_client
-
-
+from handyman import ollama_client
 class FakeResponse:
     def __init__(self, status_code=200, json_data=None):
         self.status_code = status_code

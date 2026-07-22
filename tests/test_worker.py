@@ -1,7 +1,5 @@
-import db
-import worker
-
-
+from handyman import db
+from handyman import worker
 def _job(tmp_path):
     conn = db.connect(tmp_path / "jobs.db")
     job_id = db.create_job(conn, "do a thing", str(tmp_path))

@@ -8,3 +8,4 @@ jobs.db
 jobs/
 .env
 .superpowers/
+.stage/

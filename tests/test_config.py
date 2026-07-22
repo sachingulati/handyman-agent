@@ -18,7 +18,7 @@ def test_defaults(monkeypatch):
         "TAVILY_API_KEY",
     ):
         monkeypatch.delenv(var, raising=False)
-    import config
+    from handyman import config
     importlib.reload(config)
 
     assert config.MAX_CONCURRENT_JOBS == 3
@@ -36,7 +36,7 @@ def test_defaults(monkeypatch):
 
 def test_env_override(monkeypatch):
     monkeypatch.setenv("GEMMA_MAX_CONCURRENT_JOBS", "5")
-    import config
+    from handyman import config
     importlib.reload(config)
     assert config.MAX_CONCURRENT_JOBS == 5
 
@@ -44,7 +44,7 @@ def test_env_override(monkeypatch):
 def test_tavily_api_key_from_gemma_specific_env(monkeypatch):
     monkeypatch.delenv("TAVILY_API_KEY", raising=False)
     monkeypatch.setenv("GEMMA_TAVILY_API_KEY", "tvly-gemma-specific")
-    import config
+    from handyman import config
     importlib.reload(config)
     assert config.TAVILY_API_KEY == "tvly-gemma-specific"
 
@@ -52,7 +52,7 @@ def test_tavily_api_key_from_gemma_specific_env(monkeypatch):
 def test_tavily_api_key_falls_back_to_shared_env_var(monkeypatch):
     monkeypatch.delenv("GEMMA_TAVILY_API_KEY", raising=False)
     monkeypatch.setenv("TAVILY_API_KEY", "tvly-shared")
-    import config
+    from handyman import config
     importlib.reload(config)
     assert config.TAVILY_API_KEY == "tvly-shared"
 
@@ -60,6 +60,6 @@ def test_tavily_api_key_falls_back_to_shared_env_var(monkeypatch):
 def test_tavily_api_key_gemma_specific_overrides_shared(monkeypatch):
     monkeypatch.setenv("TAVILY_API_KEY", "tvly-shared")
     monkeypatch.setenv("GEMMA_TAVILY_API_KEY", "tvly-gemma-specific")
-    import config
+    from handyman import config
     importlib.reload(config)
     assert config.TAVILY_API_KEY == "tvly-gemma-specific"

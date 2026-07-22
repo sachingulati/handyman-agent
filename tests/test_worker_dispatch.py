@@ -1,12 +1,10 @@
 import subprocess
 import uuid
 
-import config
-import db
-import ollama_client
-import worker
-
-
+from handyman import config
+from handyman import db
+from handyman import ollama_client
+from handyman import worker
 def _spawn_recorder(monkeypatch):
     calls = []
     monkeypatch.setattr(worker, "spawn_worker", lambda job_id: calls.append(job_id))
@@ -52,7 +50,7 @@ def test_execute_tool_call_web_search_passes_configured_tavily_key(tmp_path, mon
         captured["tavily_api_key"] = tavily_api_key
         return [{"url": "https://example.com", "title": "Example"}]
 
-    import tools
+    from handyman import tools
     monkeypatch.setattr(tools, "web_search", fake_web_search)
 
     worker.execute_tool_call(str(tmp_path), "web_search", {"query": "cats"})

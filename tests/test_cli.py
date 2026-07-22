@@ -1,11 +1,9 @@
-import cli
-import config
-import db
-
-
+from handyman import cli
+from handyman import config
+from handyman import db
 def test_cli_delegate_prints_job_id(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(config, "DB_PATH", tmp_path / "jobs.db")
-    monkeypatch.setattr("server._spawn_worker", lambda job_id: None)
+    monkeypatch.setattr("handyman.server._spawn_worker", lambda job_id: None)
 
     code = cli.main(["delegate", "do a thing", str(tmp_path)])
 

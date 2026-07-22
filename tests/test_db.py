@@ -2,9 +2,7 @@ import os
 import subprocess
 import sys
 
-import db
-
-
+from handyman import db
 def _dead_pid() -> int:
     proc = subprocess.Popen([sys.executable, "-c", "pass"])
     proc.wait()

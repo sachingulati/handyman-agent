@@ -1,5 +1,4 @@
-import tools
-
+from handyman import tools
 DUCKDUCKGO_FIXTURE = """
 <div class="results">
   <div class="result">

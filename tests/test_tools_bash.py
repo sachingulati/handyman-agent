@@ -1,9 +1,7 @@
 import sys
 import time
 
-import tools
-
-
+from handyman import tools
 def test_run_bash_captures_stdout(tmp_path):
     cmd = f'{sys.executable} -c "print(1 + 1)"'
     result = tools.run_bash(str(tmp_path), cmd)
