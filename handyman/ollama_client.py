@@ -5,7 +5,7 @@ class OllamaError(Exception):
     pass
 
 
-def chat(host: str, model: str, messages: list[dict], tools: list[dict], timeout: int = 120) -> dict:
+def chat(host: str, model: str, messages: list[dict], tools: list[dict], timeout: int = 900) -> dict:
     try:
         resp = requests.post(
             f"{host}/v1/chat/completions",

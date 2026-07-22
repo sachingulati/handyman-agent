@@ -307,7 +307,10 @@ def _make_chat_fn(cfg, model: str):
     """Bind one configured model into the single-argument callable run_job wants."""
 
     def chat_fn(messages: list[dict]) -> dict:
-        return ollama_client.chat(cfg.ollama_host, model, messages, TOOL_SCHEMAS)
+        return ollama_client.chat(
+            cfg.ollama_host, model, messages, TOOL_SCHEMAS,
+            timeout=cfg.request_timeout_seconds,
+        )
 
     return chat_fn
 

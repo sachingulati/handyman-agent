@@ -19,6 +19,11 @@ DEFAULTS = {
     "max_iterations": 40,
     "max_wall_clock_seconds": 20 * 60,
     "watchdog_max_retries": 3,
+    # A single chat request must cover a cold model load, which for a
+    # large model on a machine that cannot hold it in VRAM is well over a
+    # minute before any tokens are produced. The old 120s default killed
+    # jobs mid-request that were working correctly.
+    "request_timeout_seconds": 900,
 }
 
 # Env var -> (config key, type). Env always wins over the file.
@@ -28,6 +33,7 @@ ENV_OVERRIDES = {
     "HANDYMAN_MAX_ITERATIONS": ("max_iterations", int),
     "HANDYMAN_MAX_WALL_CLOCK_SECONDS": ("max_wall_clock_seconds", int),
     "HANDYMAN_WATCHDOG_MAX_RETRIES": ("watchdog_max_retries", int),
+    "HANDYMAN_REQUEST_TIMEOUT_SECONDS": ("request_timeout_seconds", int),
 }
 
 BASE_TIER_NAME = "small"
@@ -52,6 +58,7 @@ class Config:
     max_iterations: int
     max_wall_clock_seconds: int
     watchdog_max_retries: int
+    request_timeout_seconds: int
     tavily_api_key: str | None
     db_path: Path
     jobs_log_dir: Path
