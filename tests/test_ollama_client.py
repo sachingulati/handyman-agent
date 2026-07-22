@@ -150,8 +150,12 @@ def test_chat_does_not_retry_when_the_input_is_too_large(monkeypatch):
 
     monkeypatch.setattr(ollama_client.requests, "post", fake_post)
     monkeypatch.setattr(ollama_client.time, "sleep", lambda s: None)
+    # The request must actually be near the stated limit. The metric name
+    # alone is ambiguous: the same name covers a per-minute quota, and
+    # treating that as fatal breaks retry for the common case.
+    huge = [{"role": "user", "content": "x" * 80000}]
     with pytest.raises(ollama_client.OllamaError, match="split it into smaller steps"):
-        ollama_client.chat("http://h", "m", [], [])
+        ollama_client.chat("http://h", "m", huge, [])
     assert len(calls) == 1, "an oversized request must not be retried"
 
 
@@ -181,3 +185,32 @@ def test_chat_honours_a_provider_supplied_retry_delay(monkeypatch):
     monkeypatch.setattr(ollama_client.time, "sleep", lambda s: slept.append(s))
     ollama_client.chat("http://h", "m", [], [])
     assert slept == [7.5], f"should wait the suggested 7.5s, waited {slept}"
+
+
+def test_chat_retries_a_quota_429_even_though_it_names_the_token_metric(monkeypatch):
+    """A per-minute token quota reports the same metric as a per-request
+    size cap. A small request hitting it is throttling, not an oversized
+    request, and must still be retried."""
+    calls = []
+
+    class _R:
+        def __init__(self, code):
+            self.status_code = code
+
+        def json(self):
+            if self.status_code == 429:
+                return [{"error": {"message":
+                         "Quota exceeded for metric: ...input_token_count, limit: 16000"}}]
+            return {"choices": [{"message": {"content": "ok"}}]}
+
+        def raise_for_status(self):
+            pass
+
+    def fake_post(*a, **k):
+        calls.append(1)
+        return _R(429) if len(calls) == 1 else _R(200)
+
+    monkeypatch.setattr(ollama_client.requests, "post", fake_post)
+    monkeypatch.setattr(ollama_client.time, "sleep", lambda s: None)
+    ollama_client.chat("http://h", "m", [{"role": "user", "content": "tiny"}], [])
+    assert len(calls) == 2, "a small request hitting a quota window must retry"

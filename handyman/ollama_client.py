@@ -1,3 +1,4 @@
+import json
 import random
 import re
 import time
@@ -10,7 +11,7 @@ RATE_LIMIT_BASE_DELAY = 4  # seconds; doubles each attempt
 MAX_SUGGESTED_DELAY = 60  # cap on a provider-supplied retry hint
 
 
-def _rate_limit_detail(resp) -> tuple[bool, float | None]:
+def _rate_limit_detail(resp, request_tokens: int = 0) -> tuple[bool, float | None]:
     """Inspect a 429 body: is it retryable, and how long should we wait?
 
     A provider can answer 429 for two very different reasons. A genuine
@@ -27,7 +28,13 @@ def _rate_limit_detail(resp) -> tuple[bool, float | None]:
         payload = payload[0] if payload else {}
     message = str((payload or {}).get("error", {}).get("message", ""))
 
-    if "input_token_count" in message or "input token count" in message.lower():
+    # A provider reports a per-request size cap and a per-minute token
+    # quota under the SAME metric name, so the name alone cannot tell them
+    # apart. Matching on it treated ordinary throttling as fatal and broke
+    # every retry. Compare the stated limit against what we actually sent:
+    # only a request genuinely at or over the limit is hopeless.
+    limit = re.search(r"limit:\s*(\d+)", message)
+    if limit and "token" in message and request_tokens >= int(limit.group(1)) * 0.8:
         return False, None
 
     match = re.search(r"retry in ([0-9.]+)s", message)
@@ -61,7 +68,8 @@ def chat(host: str, model: str, messages: list[dict], tools: list[dict],
     for attempt in range(RATE_LIMIT_RETRIES):
         if resp.status_code != 429:
             break
-        retryable, suggested = _rate_limit_detail(resp)
+        approx_tokens = len(json.dumps(messages)) // 4
+        retryable, suggested = _rate_limit_detail(resp, approx_tokens)
         if not retryable:
             raise OllamaError(
                 "the request is larger than this account's per-request token "
