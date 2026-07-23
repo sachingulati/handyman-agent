@@ -78,3 +78,30 @@ def test_run_accepts_a_task_file_or_literal_text(tmp_path):
     assert args.task == str(brief)
     args = cli.build_parser().parse_args(["run", "inline task text", str(tmp_path)])
     assert args.task == "inline task text"
+
+
+def test_models_command_runs_and_separates_enabled_from_offered(tmp_path, monkeypatch, capsys):
+    """This command had a NameError that the whole suite missed, because
+    nothing exercised it. Cheap to cover, and it is the surface a
+    delegating model reads before choosing."""
+    from conftest import make_config
+    from handyman import registry
+
+    monkeypatch.setenv("HM_KEY", "k")
+    monkeypatch.setattr(
+        config, "load",
+        lambda *a, **k: make_config(
+            tmp_path,
+            providers={"local": {"host": "http://x"},
+                       "cloud": {"host": "http://y", "api_key_env": "HM_KEY"}},
+            models=[{"name": "big", "provider": "cloud", "model": "m", "cost": "free"}]))
+    monkeypatch.setattr(registry, "discover",
+                        lambda p, timeout=15: ["free-local"] if not p.hosted else ["pricey"])
+
+    args = cli.build_parser().parse_args(["models"])
+    assert args.func(args) == 0
+
+    out = capsys.readouterr().out
+    assert "enabled" in out and "available, not enabled" in out
+    assert "big" in out and "free-local" in out
+    assert "pricey" in out

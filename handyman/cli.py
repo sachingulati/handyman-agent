@@ -213,19 +213,19 @@ def cmd_models(args) -> int:
     enabled = [m for m in models if m.enabled]
     offered = [m for m in models if not m.enabled]
 
-    print(f"\nusable ({len(usable)}):")
+    print(f"\nenabled ({len(enabled)}) - jobs can use these:")
     for m in sorted(enabled, key=lambda m: (m.provider.name, m.name)):
         origin = "registered" if m.name in explicit else "discovered"
         alias = f" -> {m.model_id}" if m.model_id != m.name else ""
         note = f"  {m.note}" if m.note else ""
         print(f"  {m.name:32s} {m.provider.name:9s} {m.cost:8s} {origin}{alias}{note}")
 
-    if listed and not args.registered_only:
-        print(f"\noffered but NOT usable ({len(listed)}):")
-        print("  Hosted pricing ranges from free to expensive, so a model is")
-        print("  only reachable once someone has chosen it. Add one under")
-        print("  models: to allow it.")
-        for m in sorted(listed, key=lambda m: (m.provider.name, m.name))[:args.limit]:
+    if offered and not args.registered_only:
+        print(f"\navailable, not enabled ({len(offered)}):")
+        print("  These providers offer them, but nobody has chosen them here.")
+        print("  Hosted pricing ranges from free to expensive, so enabling is")
+        print("  a decision: add one under models: in the config to use it.")
+        for m in sorted(offered, key=lambda m: (m.provider.name, m.name))[:args.limit]:
             print(f"  {m.name:32s} {m.provider.name:9s} {m.cost}")
         if len(offered) > args.limit:
             print(f"  ... and {len(offered) - args.limit} more (--limit to see more)")
