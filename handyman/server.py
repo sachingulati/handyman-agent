@@ -34,7 +34,8 @@ def _spawn_worker(job_id: str) -> int:
 
 
 @mcp.tool()
-def gemma_delegate(task: str, working_dir: str, allow_hosted: bool = False) -> dict:
+def gemma_delegate(task: str, working_dir: str, provider_name: str | None = None,
+                   model: str | None = None) -> dict:
     """Delegate a task to a local Gemma 4 subagent that runs in the background.
 
     Use this for mechanical/low-stakes work: bulk file edits, research and
@@ -42,9 +43,14 @@ def gemma_delegate(task: str, working_dir: str, allow_hosted: bool = False) -> d
     don't need Claude's own reasoning. Returns immediately with a job_id —
     call gemma_check(job_id) later to see progress or get the result.
 
-    allow_hosted lets the job run on a hosted model when the local one is
-    busy or unreachable. It is off by default: hosted work leaves this
-    machine, so it is never chosen for you.
+    provider_name selects where the job runs: "local" or "hosted". Leave it
+    unset to use the local model server; hosted is never chosen for you,
+    because hosted work sends the task and any files it reads off this
+    machine.
+
+    model selects which model to use, overriding the configured default.
+    Use it when a task needs more capability than the everyday model, or
+    less.
     """
     cfg = config.load()
     if not Path(working_dir).is_dir():
@@ -59,14 +65,16 @@ def gemma_delegate(task: str, working_dir: str, allow_hosted: bool = False) -> d
         try:
             chosen = provider.choose(
                 cfg,
+                requested=provider_name,
                 local_available=_local_server_reachable(cfg),
                 at_capacity=at_capacity,
-                allow_hosted=allow_hosted,
             )
+            chosen_model = provider.resolve_model(cfg, model)
         except provider.ProviderUnavailable as exc:
             return {"error": str(exc)}
 
-        job_id = db.create_job(conn, task, working_dir, provider=chosen)
+        job_id = db.create_job(conn, task, working_dir, provider=chosen,
+                               model=chosen_model)
         claimed = db.try_claim_with_cap(
             conn, job_id, pid=0, max_concurrent=cfg.max_concurrent_jobs,
             provider=chosen,
@@ -86,8 +94,10 @@ def gemma_delegate(task: str, working_dir: str, allow_hosted: bool = False) -> d
                     conn, job_id, "error", result_summary=f"failed to spawn worker: {exc}"
                 )
                 return {"job_id": job_id, "status": "error"}
-            return {"job_id": job_id, "status": "running", "provider": chosen}
-        return {"job_id": job_id, "status": "queued", "provider": chosen}
+            return {"job_id": job_id, "status": "running", "provider": chosen,
+                    "model": chosen_model}
+        return {"job_id": job_id, "status": "queued", "provider": chosen,
+                "model": chosen_model}
     except Exception as exc:
         return {"error": str(exc)}
     finally:

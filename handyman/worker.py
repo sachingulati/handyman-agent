@@ -399,6 +399,15 @@ def main(job_id: str) -> None:
         base_tier, *escalation = cfg.tiers
         if hosted:
             escalation = []
+
+        # The caller chose the model; the tier ladder only applies when
+        # they did not, since escalation is about growing context on one
+        # GPU and says nothing about which model was asked for.
+        requested_model = job.get("model") or ""
+        if requested_model and requested_model != base_tier.model:
+            base_tier = config.Tier(name=base_tier.name, model=requested_model,
+                                    threshold_tokens=0)
+            escalation = []
         # A hosted provider has nothing to pull, and its /api/tags does
         # not exist - asking would fail the job before it starts.
         # Nothing to pull for a hosted provider, and its /api/tags does

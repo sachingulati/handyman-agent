@@ -82,6 +82,7 @@ def connect(db_path) -> sqlite3.Connection:
             pid INTEGER,
             cancel_requested INTEGER NOT NULL DEFAULT 0,
             provider TEXT NOT NULL DEFAULT 'local',
+            model TEXT NOT NULL DEFAULT '',
             current_tier TEXT NOT NULL DEFAULT 'small',
             escalating INTEGER NOT NULL DEFAULT 0
         )
@@ -100,6 +101,8 @@ def connect(db_path) -> sqlite3.Connection:
     existing = {row[1] for row in conn.execute("PRAGMA table_info(jobs)")}
     if "provider" not in existing:
         conn.execute("ALTER TABLE jobs ADD COLUMN provider TEXT NOT NULL DEFAULT 'local'")
+    if "model" not in existing:
+        conn.execute("ALTER TABLE jobs ADD COLUMN model TEXT NOT NULL DEFAULT ''")
     conn.commit()
 
     from handyman import progress  # imported here to avoid a circular import at module load
@@ -109,13 +112,13 @@ def connect(db_path) -> sqlite3.Connection:
 
 
 def create_job(conn: sqlite3.Connection, task: str, working_dir: str,
-               provider: str = "local") -> str:
+               provider: str = "local", model: str = "") -> str:
     job_id = uuid.uuid4().hex
     ts = now_iso()
     conn.execute(
         "INSERT INTO jobs (id, task, working_dir, status, created_at, updated_at, "
-        "cancel_requested, provider) VALUES (?, ?, ?, 'queued', ?, ?, 0, ?)",
-        (job_id, task, working_dir, ts, ts, provider),
+        "cancel_requested, provider, model) VALUES (?, ?, ?, 'queued', ?, ?, 0, ?, ?)",
+        (job_id, task, working_dir, ts, ts, provider, model),
     )
     conn.commit()
     return job_id
@@ -125,7 +128,7 @@ def get_job(conn: sqlite3.Connection, job_id: str) -> dict | None:
     row = conn.execute(
         "SELECT id, task, working_dir, status, created_at, updated_at, "
         "result_summary, transcript_path, pid, cancel_requested, "
-        "current_tier, escalating, provider "
+        "current_tier, escalating, provider, model "
         "FROM jobs WHERE id=?",
         (job_id,),
     ).fetchone()
@@ -134,7 +137,7 @@ def get_job(conn: sqlite3.Connection, job_id: str) -> dict | None:
     keys = [
         "id", "task", "working_dir", "status", "created_at", "updated_at",
         "result_summary", "transcript_path", "pid", "cancel_requested",
-        "current_tier", "escalating", "provider",
+        "current_tier", "escalating", "provider", "model",
     ]
     return dict(zip(keys, row))
 

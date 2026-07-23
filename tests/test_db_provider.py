@@ -65,3 +65,31 @@ def test_existing_database_gains_the_provider_column(tmp_path):
     conn = db.connect(path)
     cols = {r[1] for r in conn.execute("PRAGMA table_info(jobs)")}
     assert "provider" in cols
+
+
+def test_model_defaults_to_empty(tmp_path):
+    conn = db.connect(tmp_path / "jobs.db")
+    job_id = db.create_job(conn, "t", "/d")
+    assert db.get_job(conn, job_id)["model"] == ""
+
+
+def test_create_job_records_the_requested_model(tmp_path):
+    """The caller chooses the model, so the choice has to survive the hop
+    into the worker process."""
+    conn = db.connect(tmp_path / "jobs.db")
+    job_id = db.create_job(conn, "t", "/d", model="qwen3:14b")
+    assert db.get_job(conn, job_id)["model"] == "qwen3:14b"
+
+
+def test_existing_database_gains_the_model_column(tmp_path):
+    import sqlite3
+
+    path = tmp_path / "old.db"
+    old = sqlite3.connect(path)
+    old.execute("CREATE TABLE jobs (id TEXT PRIMARY KEY, task TEXT NOT NULL, "
+                "working_dir TEXT NOT NULL, status TEXT NOT NULL, "
+                "created_at TEXT NOT NULL, updated_at TEXT NOT NULL)")
+    old.commit()
+    old.close()
+    conn = db.connect(path)
+    assert "model" in {r[1] for r in conn.execute("PRAGMA table_info(jobs)")}

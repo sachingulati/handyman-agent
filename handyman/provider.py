@@ -1,63 +1,99 @@
-"""Deciding whether a job runs locally or on a hosted model.
+"""Which model runs a job, and where.
 
-The rule is deliberately conservative in one direction: a job never goes
-to a hosted provider by accident. Sending work off the machine means the
-task text, and whatever files the model reads, leave it. Someone who
-pasted an API key once, months ago, should not discover that an unrelated
-local outage has been quietly forwarding their code ever since.
+Both are the caller's decision. Only the caller knows whether a task
+wants the strongest available model or the cheapest, whether it may leave
+the machine, and whether latency or privacy matters more. Guessing on
+their behalf produces a tool that is convenient right up until it makes
+the wrong call silently.
 
-So the caller opts in, and that opt-in covers both reasons hosted might
-be reached for - the local queue being busy, and the local server being
-down. One rule, not two.
+So `provider` and `model` are arguments. What is left here is validation:
+refusing a request that cannot work, and saying why in terms of what to
+do about it.
+
+One default is deliberately conservative. When the caller says nothing,
+work stays local - a busy queue waits rather than being redirected off
+the machine. Hosted work carries the task text and whatever files the
+model reads to a third party, and that is not something to arrange for
+someone who did not ask.
 """
 
 from handyman import config
 
+LOCAL = "local"
+HOSTED = "hosted"
+PROVIDERS = (LOCAL, HOSTED)
+
 
 class ProviderUnavailable(Exception):
-    """No provider can run this job, with an explanation of what to do."""
+    """A job cannot run as requested, with an explanation of what to do."""
 
 
-def choose(cfg, local_available: bool, at_capacity: bool,
-           allow_hosted: bool) -> str:
-    """Return "local" or "hosted", or raise saying why neither works.
+def _hosted_ready(cfg) -> bool:
+    return bool(cfg.api_key_env) and bool(config.api_key_for(cfg))
 
+
+def choose(cfg, requested: str | None, local_available: bool,
+           at_capacity: bool) -> str:
+    """Validate the caller's choice of provider, or apply the safe default.
+
+    requested       - "local", "hosted", or None to let the default apply
     local_available - whether the local model server answered
-    at_capacity    - whether the local concurrency cap is already reached
-    allow_hosted   - the caller's explicit consent to leave the machine
+    at_capacity     - whether the local concurrency cap is already reached
     """
-    hosted_ready = bool(cfg.api_key_env) and bool(config.api_key_for(cfg))
     local_configured = bool(getattr(cfg, "tiers", None))
 
-    # Nothing local to run: hosted is the only option, and there is
-    # nothing for the caller to have opted out of.
-    if not local_configured:
-        if hosted_ready:
-            return "hosted"
+    if requested is not None:
+        if requested not in PROVIDERS:
+            raise ProviderUnavailable(
+                f"unknown provider {requested!r} - expected one of {', '.join(PROVIDERS)}"
+            )
+        if requested == HOSTED:
+            if not _hosted_ready(cfg):
+                raise ProviderUnavailable(
+                    "hosted was requested but there is no API key - set "
+                    f"{cfg.api_key_env or 'an api_key_env in the config'} "
+                    "and try again"
+                )
+            return HOSTED
+        if not local_available:
+            raise ProviderUnavailable(
+                "local was requested but the model server is not reachable - "
+                "start it, or request the hosted provider instead"
+            )
+        # A busy local queue is not a failure: the job waits its turn.
+        return LOCAL
+
+    # Nothing requested. Prefer local, and never silently leave the machine.
+    if local_configured and local_available:
+        return LOCAL
+    if not local_configured and _hosted_ready(cfg):
+        # Hosted-only install: there is nothing to opt out of.
+        return HOSTED
+    if _hosted_ready(cfg):
         raise ProviderUnavailable(
-            "no model tiers are configured and no hosted API key is set - "
-            "run `handyman setup` to choose a model"
-        )
-
-    if local_available and not at_capacity:
-        return "local"
-
-    if at_capacity and local_available:
-        # Queueing is the established behaviour and stays the default.
-        return "hosted" if (allow_hosted and hosted_ready) else "local"
-
-    # Local is unreachable.
-    if allow_hosted and hosted_ready:
-        return "hosted"
-
-    if hosted_ready:
-        raise ProviderUnavailable(
-            "the local model server is not reachable. Start it, or re-submit "
-            "with allow_hosted=True to send this task to the hosted provider "
-            "instead - note that doing so sends the task and any files it "
-            "reads off this machine."
+            'the local model server is not reachable. Start it, or pass '
+            'provider="hosted" to run this task on the hosted model - note '
+            "that doing so sends the task, and any files it reads, off this "
+            "machine."
         )
     raise ProviderUnavailable(
-        "the local model server is not reachable - start it, or configure a "
-        "hosted provider with `handyman setup`"
+        "no local model server and no hosted API key - run `handyman setup`"
     )
+
+
+def resolve_model(cfg, requested: str | None) -> str:
+    """The model this job should use.
+
+    A requested model is taken as given, even when this install has never
+    seen it: the caller may know about one that was pulled since the
+    config was written, and refusing it would make the argument useless.
+    """
+    if requested:
+        return requested
+    tiers = getattr(cfg, "tiers", None)
+    if not tiers:
+        raise ProviderUnavailable(
+            "no model was requested and no model is configured - pass a model, "
+            "or run `handyman setup`"
+        )
+    return tiers[0].model
