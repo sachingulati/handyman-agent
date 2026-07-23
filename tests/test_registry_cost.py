@@ -47,16 +47,16 @@ def test_a_discovered_local_model_can_be_used(tmp_path, monkeypatch):
     assert registry.resolve(cfg, "qwen3:8b").provider.name == "local"
 
 
-def test_a_discovered_hosted_model_is_refused_until_registered(tmp_path, monkeypatch):
+def test_a_discovered_hosted_model_is_refused_until_enabled(tmp_path, monkeypatch):
     """Hosted models may bill per token and vary enormously in price. A
     delegating model must not be able to reach one that nobody chose."""
     cfg = _cfg(tmp_path, monkeypatch)
     _route(monkeypatch)
-    with pytest.raises(registry.ModelUnavailable, match="not registered"):
+    with pytest.raises(registry.ModelUnavailable, match="not enabled"):
         registry.resolve(cfg, "gemini-2.5-pro")
 
 
-def test_the_refusal_explains_how_to_allow_it(tmp_path, monkeypatch):
+def test_the_refusal_explains_how_to_enable_it(tmp_path, monkeypatch):
     cfg = _cfg(tmp_path, monkeypatch)
     _route(monkeypatch)
     with pytest.raises(registry.ModelUnavailable) as exc:
@@ -101,12 +101,12 @@ def test_a_provider_can_opt_into_using_anything_it_offers(tmp_path, monkeypatch)
     assert registry.resolve(cfg, "gemini-2.5-pro").provider.name == "cloud"
 
 
-def test_listing_still_shows_unregistered_hosted_models(tmp_path, monkeypatch):
-    """They are visible so they can be chosen deliberately - just not
-    usable until someone does."""
+def test_listing_still_shows_models_that_are_not_enabled(tmp_path, monkeypatch):
+    """Visible so they can be found and chosen - hiding them would mean
+    nobody could discover what is on offer."""
     cfg = _cfg(tmp_path, monkeypatch)
     _route(monkeypatch)
     names = {m.name: m for m in registry.available(cfg)}
     assert "gemini-2.5-pro" in names
-    assert names["gemini-2.5-pro"].usable is False
-    assert names["qwen3:8b"].usable is True
+    assert names["gemini-2.5-pro"].enabled is False
+    assert names["qwen3:8b"].enabled is True

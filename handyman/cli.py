@@ -210,11 +210,11 @@ def cmd_models(args) -> int:
 
     explicit = {m.name for m in registry.registered(cfg)}
     models = registry.available(cfg, include_discovered=not args.registered_only)
-    usable = [m for m in models if m.usable]
-    listed = [m for m in models if not m.usable]
+    enabled = [m for m in models if m.enabled]
+    offered = [m for m in models if not m.enabled]
 
     print(f"\nusable ({len(usable)}):")
-    for m in sorted(usable, key=lambda m: (m.provider.name, m.name)):
+    for m in sorted(enabled, key=lambda m: (m.provider.name, m.name)):
         origin = "registered" if m.name in explicit else "discovered"
         alias = f" -> {m.model_id}" if m.model_id != m.name else ""
         note = f"  {m.note}" if m.note else ""
@@ -227,8 +227,8 @@ def cmd_models(args) -> int:
         print("  models: to allow it.")
         for m in sorted(listed, key=lambda m: (m.provider.name, m.name))[:args.limit]:
             print(f"  {m.name:32s} {m.provider.name:9s} {m.cost}")
-        if len(listed) > args.limit:
-            print(f"  ... and {len(listed) - args.limit} more (--limit to see more)")
+        if len(offered) > args.limit:
+            print(f"  ... and {len(offered) - args.limit} more (--limit to see more)")
 
     if not models:
         print("  none - is the model server running, and is a hosted key set?")
@@ -340,7 +340,7 @@ def build_parser() -> argparse.ArgumentParser:
     ml.add_argument("--registered-only", action="store_true",
                     help="skip discovery; show only explicit config entries")
     ml.add_argument("--limit", type=int, default=10,
-                    help="how many unusable offerings to list")
+                    help="how many not-enabled models to list")
     ml.set_defaults(func=cmd_models)
 
     st = sub.add_parser("setup", help="pick a model for this machine and verify it")

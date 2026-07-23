@@ -61,14 +61,17 @@ class Model:
 
     `cost` is advisory and defaults to "unknown" rather than "free":
     silence about price must never read as a promise that there is none.
-    `usable` is the enforced part - a discovered hosted model is visible
-    so it can be chosen deliberately, but not reachable until it is.
+
+    `enabled` is the enforced part, and describes a decision rather than a
+    property of the model: a provider may offer something perfectly
+    capable that nobody has agreed to pay for. Such a model stays visible,
+    so it can be found and chosen, but jobs cannot reach it.
     """
     name: str
     provider: Provider
     model_id: str
     cost: str = "unknown"
-    usable: bool = True
+    enabled: bool = True
     note: str = ""
 
 
@@ -153,13 +156,13 @@ def available(cfg, include_discovered: bool = True) -> list[Model]:
             # A local model is already downloaded and costs nothing to
             # run, so discovering it is enough. A hosted one may bill per
             # token, so it is listed but not reachable until registered.
-            usable = (not provider.hosted) or provider.allow_discovered
+            enabled = (not provider.hosted) or provider.allow_discovered
             for model_id in discover(provider):
                 if model_id not in taken:
                     models.append(Model(
                         name=model_id, provider=provider, model_id=model_id,
                         cost="free" if not provider.hosted else "unknown",
-                        usable=usable,
+                        enabled=enabled,
                     ))
                     taken.add(model_id)
     return models
@@ -180,16 +183,15 @@ def resolve(cfg, name: str | None, provider_name: str | None = None) -> Model:
     if name:
         for model in candidates:
             if name in (model.name, model.model_id):
-                if not model.usable:
+                if not model.enabled:
                     raise ModelUnavailable(
-                        f"{name!r} is offered by provider "
-                        f"{model.provider.name!r} but is not registered, so it "
-                        "will not be used. Hosted models vary from free to "
-                        "expensive, and that is not a choice to make on "
-                        "someone's behalf. To allow it, add it under models: "
-                        f"with provider: {model.provider.name}, or set "
-                        "allow_discovered on that provider to permit anything "
-                        "it offers."
+                        f"{name!r} is available on provider "
+                        f"{model.provider.name!r} but is not enabled here. "
+                        "Hosted models range from free to expensive, so one "
+                        "is only reachable once someone has chosen it. To "
+                        f"enable it, add it under models: with provider: "
+                        f"{model.provider.name}, or set allow_discovered on "
+                        "that provider to accept everything it offers."
                     )
                 return model
 
