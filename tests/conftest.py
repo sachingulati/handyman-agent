@@ -26,6 +26,8 @@ def make_config(tmp_path, **overrides):
         reasoning_effort="none",
         chat_path="/v1/chat/completions",
         api_key_env="",
+        providers={},
+        models=[],
         tavily_api_key=None,
         db_path=tmp_path / "jobs.db",
         jobs_log_dir=tmp_path / "jobs",

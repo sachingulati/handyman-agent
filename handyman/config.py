@@ -87,6 +87,8 @@ class Config:
     reasoning_effort: str
     chat_path: str
     api_key_env: str
+    providers: dict
+    models: list
     tavily_api_key: str | None
     db_path: Path
     jobs_log_dir: Path
@@ -206,6 +208,10 @@ def load(path=None) -> Config:
 
     return Config(
         tiers=parse_tiers(raw.get("tiers")),
+        # A model is registered together with the provider that holds it,
+        # so asking for a model selects its endpoint too.
+        providers=raw.get("providers") or {},
+        models=raw.get("models") or [],
         tavily_api_key=tavily,
         db_path=Path(os.environ.get("HANDYMAN_DB_PATH") or data_dir / "jobs.db"),
         jobs_log_dir=Path(os.environ.get("HANDYMAN_JOBS_LOG_DIR") or data_dir / "jobs"),

@@ -6,6 +6,7 @@ from handyman import config
 from handyman import db
 from handyman import progress
 from handyman import provider
+from handyman import registry
 from handyman import worker
 
 mcp = FastMCP("gemma-agent")
@@ -61,16 +62,20 @@ def gemma_delegate(task: str, working_dir: str, provider_name: str | None = None
         conn = db.connect(cfg.db_path)
         db.reap_dead_running_jobs(conn)
 
+        # Resolve the model first, then take the provider from it. Choosing
+        # the two independently let them disagree: a job could be labelled
+        # local while its model only existed on a hosted endpoint, so the
+        # request went one way and the concurrency accounting the other.
         at_capacity = db.count_running_local(conn) >= cfg.max_concurrent_jobs
         try:
-            chosen = provider.choose(
-                cfg,
-                requested=provider_name,
-                local_available=_local_server_reachable(cfg),
-                at_capacity=at_capacity,
+            resolved = registry.resolve(cfg, model, provider_name)
+            chosen = "hosted" if resolved.provider.hosted else "local"
+            chosen_model = resolved.name
+            provider.validate(
+                cfg, resolved,
+                local_available=_local_server_reachable(cfg) if chosen == "local" else True,
             )
-            chosen_model = provider.resolve_model(cfg, model)
-        except provider.ProviderUnavailable as exc:
+        except (registry.ModelUnavailable, provider.ProviderUnavailable) as exc:
             return {"error": str(exc)}
 
         job_id = db.create_job(conn, task, working_dir, provider=chosen,

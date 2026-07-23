@@ -11,6 +11,7 @@ from handyman import db
 from handyman import ollama_client
 from handyman import procutil
 from handyman import progress
+from handyman import registry
 from handyman import tools
 
 TOOL_SCHEMAS = [
@@ -352,16 +353,26 @@ def execute_tool_call(working_dir: str, name: str, arguments: dict, cfg) -> str:
         return f"error: {exc}"
 
 
-def _make_chat_fn(cfg, model: str):
-    """Bind one configured model into the single-argument callable run_job wants."""
+def _make_chat_fn(cfg, model, resolved=None):
+    """Bind one model, and the endpoint that actually holds it.
+
+    The endpoint comes from the model's own registration rather than from
+    a single configured host. Reading the host separately meant a job
+    marked "hosted" still went to localhost - the destination and the
+    bookkeeping could disagree.
+    """
+    model_id = resolved.model_id if resolved else model
+    host = resolved.provider.host if resolved else cfg.ollama_host
+    chat_path = resolved.provider.chat_path if resolved else cfg.chat_path
+    api_key = resolved.provider.api_key() if resolved else config.api_key_for(cfg)
 
     def chat_fn(messages: list[dict]) -> dict:
         return ollama_client.chat(
-            cfg.ollama_host, model, messages, TOOL_SCHEMAS,
+            host, model_id, messages, TOOL_SCHEMAS,
             timeout=cfg.request_timeout_seconds,
             reasoning_effort=cfg.reasoning_effort,
-            api_key=config.api_key_for(cfg),
-            chat_path=cfg.chat_path,
+            api_key=api_key,
+            chat_path=chat_path,
         )
 
     return chat_fn
@@ -404,9 +415,23 @@ def main(job_id: str) -> None:
         # they did not, since escalation is about growing context on one
         # GPU and says nothing about which model was asked for.
         requested_model = job.get("model") or ""
-        if requested_model and requested_model != base_tier.model:
-            base_tier = config.Tier(name=base_tier.name, model=requested_model,
-                                    threshold_tokens=0)
+        resolved = None
+        try:
+            resolved = registry.resolve(cfg, requested_model or None,
+                                        job.get("provider"))
+        except registry.ModelUnavailable as exc:
+            # Only fatal when the caller named something specific; without
+            # a name the configured tier is still a reasonable fallback.
+            if requested_model:
+                db.update_status(conn, job_id, "error", result_summary=str(exc))
+                return
+        if resolved:
+            hosted = resolved.provider.hosted
+            if resolved.model_id != base_tier.model:
+                base_tier = config.Tier(name=base_tier.name,
+                                        model=resolved.model_id, threshold_tokens=0)
+                escalation = []
+        if hosted:
             escalation = []
         # A hosted provider has nothing to pull, and its /api/tags does
         # not exist - asking would fail the job before it starts.
@@ -422,7 +447,7 @@ def main(job_id: str) -> None:
             job["task"],
             job["working_dir"],
             log_path,
-            chat_fn=_make_chat_fn(cfg, base_tier.model),
+            chat_fn=_make_chat_fn(cfg, base_tier.model, resolved),
             max_iterations=cfg.max_iterations,
             max_wall_clock_seconds=cfg.max_wall_clock_seconds,
             watchdog_max_retries=cfg.watchdog_max_retries,

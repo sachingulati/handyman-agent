@@ -194,6 +194,32 @@ def cmd_doctor(args) -> int:
     return 0 if not problems else 1
 
 
+def cmd_models(args) -> int:
+    """List every model that can be asked for, and where each one lives."""
+    from handyman import registry
+
+    cfg = config.load()
+    providers = registry.providers_from_config(cfg)
+    print("providers:")
+    for p in providers:
+        kind = "hosted" if p.hosted else "local"
+        key = ""
+        if p.hosted:
+            key = " (key set)" if p.api_key() else f" (NO KEY - set {p.api_key_env})"
+        print(f"  {p.name:10s} {kind:6s} {p.host}{key}")
+
+    explicit = {m.name for m in registry.registered(cfg)}
+    models = registry.available(cfg, include_discovered=not args.registered_only)
+    print(f"\nmodels ({len(models)}):")
+    for m in sorted(models, key=lambda m: (m.provider.name, m.name)):
+        origin = "registered" if m.name in explicit else "discovered"
+        alias = f"  -> {m.model_id}" if m.model_id != m.name else ""
+        print(f"  {m.name:34s} {m.provider.name:10s} {origin}{alias}")
+    if not models:
+        print("  none - is the model server running, and is a hosted key set?")
+    return 0
+
+
 def cmd_setup(args) -> int:
     """Pick a model for this machine and prove it works before saving it."""
     import yaml
@@ -294,6 +320,11 @@ def build_parser() -> argparse.ArgumentParser:
     doc = sub.add_parser("doctor", help="check that results could be trusted")
     doc.add_argument("--workspace")
     doc.set_defaults(func=cmd_doctor)
+
+    ml = sub.add_parser("models", help="list models and where each one lives")
+    ml.add_argument("--registered-only", action="store_true",
+                    help="skip discovery; show only explicit config entries")
+    ml.set_defaults(func=cmd_models)
 
     st = sub.add_parser("setup", help="pick a model for this machine and verify it")
     st.add_argument("--model", help="skip detection and test this model")

@@ -218,38 +218,57 @@ def test_gemma_delegate_records_the_real_worker_pid(tmp_path, monkeypatch):
     assert job["pid"] == 4242
 
 
-def test_delegate_records_the_callers_provider_and_model(tmp_path, monkeypatch):
-    """The caller decides where a job runs and on what. Both have to
-    survive into the job row, because the worker is a separate process."""
+def test_delegate_records_the_callers_model_and_derives_the_provider(tmp_path, monkeypatch):
+    """The caller names a model; where it runs follows from where that
+    model lives. Choosing the two independently let them disagree."""
+    monkeypatch.setenv("HM_KEY", "k")
     monkeypatch.setattr(
         config, "load",
-        lambda *a, **k: make_config(tmp_path, db_path=tmp_path / "jobs.db",
-                                    api_key_env="HM_KEY"))
-    monkeypatch.setenv("HM_KEY", "k")
+        lambda *a, **k: make_config(
+            tmp_path, db_path=tmp_path / "jobs.db",
+            providers={"cloud": {"host": "https://example/openai",
+                                 "api_key_env": "HM_KEY"}},
+            models=[{"name": "big", "provider": "cloud", "model": "remote-1"}]))
     monkeypatch.setattr(server, "_spawn_worker", lambda job_id: 123)
 
-    result = server.gemma_delegate("do a thing", str(tmp_path),
-                                   provider_name="hosted", model="qwen3:14b")
+    result = server.gemma_delegate("do a thing", str(tmp_path), model="big")
 
     assert result["provider"] == "hosted"
-    assert result["model"] == "qwen3:14b"
+    assert result["model"] == "big"
     conn = db.connect(tmp_path / "jobs.db")
     job = db.get_job(conn, result["job_id"])
     conn.close()
     assert job["provider"] == "hosted"
-    assert job["model"] == "qwen3:14b"
+    assert job["model"] == "big"
 
 
-def test_delegate_reports_why_a_requested_provider_cannot_run(tmp_path, monkeypatch):
+def test_delegate_reports_a_hosted_model_with_no_key(tmp_path, monkeypatch):
+    monkeypatch.delenv("HM_KEY", raising=False)
     monkeypatch.setattr(
         config, "load",
-        lambda *a, **k: make_config(tmp_path, db_path=tmp_path / "jobs.db",
-                                    api_key_env="HM_KEY"))
-    monkeypatch.delenv("HM_KEY", raising=False)
+        lambda *a, **k: make_config(
+            tmp_path, db_path=tmp_path / "jobs.db",
+            providers={"cloud": {"host": "https://example/openai",
+                                 "api_key_env": "HM_KEY"}},
+            models=[{"name": "big", "provider": "cloud", "model": "remote-1"}]))
 
-    result = server.gemma_delegate("t", str(tmp_path), provider_name="hosted")
+    result = server.gemma_delegate("t", str(tmp_path), model="big")
 
-    assert "no API key" in result["error"]
+    assert "API key" in result["error"]
+
+
+def test_delegate_rejects_a_model_the_named_provider_does_not_have(tmp_path, monkeypatch):
+    """The whole point of registering a model with its provider: a
+    combination that cannot work is refused up front, rather than becoming
+    a 404 from whichever endpoint happened to be configured."""
+    monkeypatch.setattr(
+        config, "load",
+        lambda *a, **k: make_config(tmp_path, db_path=tmp_path / "jobs.db"))
+
+    result = server.gemma_delegate("t", str(tmp_path), model="definitely-not-real",
+                                   provider_name="hosted")
+
+    assert "no model called" in result["error"]
 
 
 def test_delegate_defaults_to_the_configured_model(tmp_path, monkeypatch):

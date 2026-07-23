@@ -32,6 +32,28 @@ def _hosted_ready(cfg) -> bool:
     return bool(cfg.api_key_env) and bool(config.api_key_for(cfg))
 
 
+def validate(cfg, resolved, local_available: bool) -> None:
+    """Refuse a resolved model that cannot actually be reached.
+
+    The registry has already decided where the request goes; all that is
+    left is to fail early, with a message about what to do, rather than
+    letting the job start and die on a connection error.
+    """
+    if resolved.provider.hosted:
+        if not resolved.provider.api_key():
+            raise ProviderUnavailable(
+                f"{resolved.name} runs on {resolved.provider.name}, which needs "
+                f"an API key - set {resolved.provider.api_key_env} and try again"
+            )
+        return
+    if not local_available:
+        raise ProviderUnavailable(
+            f"{resolved.name} runs on the local model server, which is not "
+            "reachable. Start it, or ask for a hosted model - `handyman models` "
+            "lists what is available."
+        )
+
+
 def choose(cfg, requested: str | None, local_available: bool,
            at_capacity: bool) -> str:
     """Validate the caller's choice of provider, or apply the safe default.
