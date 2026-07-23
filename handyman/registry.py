@@ -37,6 +37,12 @@ class Provider:
     host: str
     chat_path: str = "/v1/chat/completions"
     api_key_env: str = ""
+    # Off by default. A hosted catalogue mixes free models with ones that
+    # bill per token at wildly different rates, and a delegating model
+    # picking from that list has no way to know which is which. Turn it on
+    # for a flat-rate or self-hosted endpoint where every model is equally
+    # safe to reach for.
+    allow_discovered: bool = False
 
     @property
     def hosted(self) -> bool:
@@ -51,10 +57,19 @@ class Provider:
 
 @dataclass(frozen=True)
 class Model:
-    """A registered model: the name a caller uses, and where to send it."""
+    """A model a caller can ask for, and where the request goes.
+
+    `cost` is advisory and defaults to "unknown" rather than "free":
+    silence about price must never read as a promise that there is none.
+    `usable` is the enforced part - a discovered hosted model is visible
+    so it can be chosen deliberately, but not reachable until it is.
+    """
     name: str
     provider: Provider
     model_id: str
+    cost: str = "unknown"
+    usable: bool = True
+    note: str = ""
 
 
 def providers_from_config(cfg) -> list[Provider]:
@@ -67,6 +82,7 @@ def providers_from_config(cfg) -> list[Provider]:
             host=spec["host"],
             chat_path=spec.get("chat_path", "/v1/chat/completions"),
             api_key_env=spec.get("api_key_env", ""),
+            allow_discovered=bool(spec.get("allow_discovered", False)),
         )
         for name, spec in declared.items()
     ]
@@ -115,8 +131,12 @@ def registered(cfg) -> list[Model]:
                 f"model {entry.get('name')!r} names provider "
                 f"{entry.get('provider')!r}, which is not configured"
             )
-        out.append(Model(name=entry["name"], provider=provider,
-                         model_id=entry.get("model", entry["name"])))
+        out.append(Model(
+            name=entry["name"], provider=provider,
+            model_id=entry.get("model", entry["name"]),
+            cost=entry.get("cost", "free" if not provider.hosted else "unknown"),
+            note=entry.get("note", ""),
+        ))
     return out
 
 
@@ -130,10 +150,17 @@ def available(cfg, include_discovered: bool = True) -> list[Model]:
     taken = {m.name for m in models}
     if include_discovered:
         for provider in providers_from_config(cfg):
+            # A local model is already downloaded and costs nothing to
+            # run, so discovering it is enough. A hosted one may bill per
+            # token, so it is listed but not reachable until registered.
+            usable = (not provider.hosted) or provider.allow_discovered
             for model_id in discover(provider):
                 if model_id not in taken:
-                    models.append(Model(name=model_id, provider=provider,
-                                        model_id=model_id))
+                    models.append(Model(
+                        name=model_id, provider=provider, model_id=model_id,
+                        cost="free" if not provider.hosted else "unknown",
+                        usable=usable,
+                    ))
                     taken.add(model_id)
     return models
 
@@ -153,6 +180,17 @@ def resolve(cfg, name: str | None, provider_name: str | None = None) -> Model:
     if name:
         for model in candidates:
             if name in (model.name, model.model_id):
+                if not model.usable:
+                    raise ModelUnavailable(
+                        f"{name!r} is offered by provider "
+                        f"{model.provider.name!r} but is not registered, so it "
+                        "will not be used. Hosted models vary from free to "
+                        "expensive, and that is not a choice to make on "
+                        "someone's behalf. To allow it, add it under models: "
+                        f"with provider: {model.provider.name}, or set "
+                        "allow_discovered on that provider to permit anything "
+                        "it offers."
+                    )
                 return model
 
         # A model named in the config is trusted even when discovery does

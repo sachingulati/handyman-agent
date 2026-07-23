@@ -85,13 +85,24 @@ def test_resolves_a_local_model_to_the_local_provider(tmp_path, monkeypatch):
 
 def test_resolves_a_hosted_model_to_the_hosted_provider(tmp_path, monkeypatch):
     """The point of the registry: asking for a hosted model selects the
-    hosted endpoint, instead of sending it to whichever host was configured."""
-    cfg = _two_providers(tmp_path, monkeypatch)
+    hosted endpoint, instead of sending it to whichever host was configured.
+
+    Registered here because a discovered hosted model is deliberately not
+    reachable until someone has chosen it - hosted pricing ranges from
+    free to expensive."""
+    monkeypatch.setenv("HM_KEY", "k")
+    cfg = _cfg(tmp_path, providers={
+        "local": {"host": "http://localhost:11434"},
+        "google": {"host": "https://example/openai", "chat_path": "/chat/completions",
+                   "api_key_env": "HM_KEY"},
+    }, models=[{"name": "gemma-4-31b-it", "provider": "google",
+                "model": "gemma-4-31b-it", "cost": "free"}])
     _route(monkeypatch)
     model = registry.resolve(cfg, "gemma-4-31b-it")
     assert model.provider.name == "google"
     assert model.provider.hosted is True
     assert model.provider.chat_path == "/chat/completions"
+    assert model.cost == "free"
 
 
 def test_unknown_model_lists_what_is_available(tmp_path, monkeypatch):

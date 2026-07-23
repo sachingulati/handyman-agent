@@ -210,11 +210,26 @@ def cmd_models(args) -> int:
 
     explicit = {m.name for m in registry.registered(cfg)}
     models = registry.available(cfg, include_discovered=not args.registered_only)
-    print(f"\nmodels ({len(models)}):")
-    for m in sorted(models, key=lambda m: (m.provider.name, m.name)):
+    usable = [m for m in models if m.usable]
+    listed = [m for m in models if not m.usable]
+
+    print(f"\nusable ({len(usable)}):")
+    for m in sorted(usable, key=lambda m: (m.provider.name, m.name)):
         origin = "registered" if m.name in explicit else "discovered"
-        alias = f"  -> {m.model_id}" if m.model_id != m.name else ""
-        print(f"  {m.name:34s} {m.provider.name:10s} {origin}{alias}")
+        alias = f" -> {m.model_id}" if m.model_id != m.name else ""
+        note = f"  {m.note}" if m.note else ""
+        print(f"  {m.name:32s} {m.provider.name:9s} {m.cost:8s} {origin}{alias}{note}")
+
+    if listed and not args.registered_only:
+        print(f"\noffered but NOT usable ({len(listed)}):")
+        print("  Hosted pricing ranges from free to expensive, so a model is")
+        print("  only reachable once someone has chosen it. Add one under")
+        print("  models: to allow it.")
+        for m in sorted(listed, key=lambda m: (m.provider.name, m.name))[:args.limit]:
+            print(f"  {m.name:32s} {m.provider.name:9s} {m.cost}")
+        if len(listed) > args.limit:
+            print(f"  ... and {len(listed) - args.limit} more (--limit to see more)")
+
     if not models:
         print("  none - is the model server running, and is a hosted key set?")
     return 0
@@ -324,6 +339,8 @@ def build_parser() -> argparse.ArgumentParser:
     ml = sub.add_parser("models", help="list models and where each one lives")
     ml.add_argument("--registered-only", action="store_true",
                     help="skip discovery; show only explicit config entries")
+    ml.add_argument("--limit", type=int, default=10,
+                    help="how many unusable offerings to list")
     ml.set_defaults(func=cmd_models)
 
     st = sub.add_parser("setup", help="pick a model for this machine and verify it")
